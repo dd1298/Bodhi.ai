@@ -51,30 +51,26 @@ export default function PaperView() {
     }
   };
 
-  const download = async () => {
-    setDownloading(true);
-    try {
-      const token = localStorage.getItem("qp_token");
-      const safeTitle =
-        (paper.title || "paper").replace(/[^a-zA-Z0-9_\- ]/g, "").trim() ||
-        "paper";
-      // Use a plain anchor with query-param auth so the browser handles it
-      // natively (works reliably inside iframes where blob downloads can be blocked).
-      const url = `${API}/papers/${id}/pdf?auth=${encodeURIComponent(token)}`;
+  const download = () => {
+    const token = localStorage.getItem("qp_token");
+    const url = `${API}/papers/${id}/pdf?auth=${encodeURIComponent(token)}`;
+    // window.open triggered from a user click is the most reliable cross-browser
+    // way to download a file with Content-Disposition: attachment — it works
+    // inside iframes (e.g. the Emergent preview) where blob URLs are often blocked.
+    // The browser opens a blank tab, follows the attachment header, downloads the
+    // file and typically auto-closes the tab.
+    const w = window.open(url, "_blank");
+    if (!w) {
+      // Popup blocked — fall back to same-window navigation. The attachment
+      // header still triggers download without navigating away.
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${safeTitle}.pdf`;
-      a.target = "_blank";
       a.rel = "noopener";
       document.body.appendChild(a);
       a.click();
-      setTimeout(() => a.remove(), 500);
-      toast.success("Download started");
-    } catch (err) {
-      toast.error("Download failed");
-    } finally {
-      setDownloading(false);
+      a.remove();
     }
+    toast.success("Download started");
   };
 
   if (!paper) {
