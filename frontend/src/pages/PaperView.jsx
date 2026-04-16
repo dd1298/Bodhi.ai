@@ -55,19 +55,21 @@ export default function PaperView() {
     setDownloading(true);
     try {
       const token = localStorage.getItem("qp_token");
-      const resp = await fetch(`${API}/papers/${id}/pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!resp.ok) throw new Error("Download failed");
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
+      const safeTitle =
+        (paper.title || "paper").replace(/[^a-zA-Z0-9_\- ]/g, "").trim() ||
+        "paper";
+      // Use a plain anchor with query-param auth so the browser handles it
+      // natively (works reliably inside iframes where blob downloads can be blocked).
+      const url = `${API}/papers/${id}/pdf?auth=${encodeURIComponent(token)}`;
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${paper.title}.pdf`;
+      a.download = `${safeTitle}.pdf`;
+      a.target = "_blank";
+      a.rel = "noopener";
       document.body.appendChild(a);
       a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      setTimeout(() => a.remove(), 500);
+      toast.success("Download started");
     } catch (err) {
       toast.error("Download failed");
     } finally {

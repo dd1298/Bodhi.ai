@@ -16,6 +16,7 @@ from fastapi import (
     Depends,
     FastAPI,
     File,
+    Header,
     HTTPException,
     Query,
     Response,
@@ -27,6 +28,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from auth import (
     create_token,
+    decode_token,
     get_current_user,
     hash_password,
     require_role,
@@ -472,13 +474,29 @@ async def delete_paper(paper_id: str, user: dict = Depends(get_current_user)):
 
 
 @api_router.get("/papers/{paper_id}/pdf")
-async def paper_pdf(paper_id: str, user: dict = Depends(get_current_user)):
+async def paper_pdf(
+    paper_id: str,
+    authorization: Optional[str] = Header(None),
+    auth: Optional[str] = Query(None),
+):
+    # Support either Authorization header or ?auth= query param (for direct download links)
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1]
+    elif auth:
+        token = auth
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    payload = decode_token(token)
+    user_id = payload["sub"]
+    role = payload.get("role", "teacher")
+
     p = await db.papers.find_one(
         {"id": paper_id, "is_deleted": False}, {"_id": 0}
     )
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    if p["owner_id"] != user["id"] and user["role"] != "admin":
+    if p["owner_id"] != user_id and role != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
     pdf_bytes = render_paper_pdf(p)
     safe_title = "".join(c for c in p["title"] if c.isalnum() or c in (" ", "-", "_")).strip()[:60] or "paper"
