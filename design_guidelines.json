@@ -1,0 +1,113 @@
+{
+  "theme": "light",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "emotional_tone": "Professional, authoritative, raw, functional. A blueprint-inspired control room for educators.",
+  "colors": {
+    "background": "#FAFAFA",
+    "surface": "#FFFFFF",
+    "text_primary": "#0A0A0A",
+    "text_secondary": "#525252",
+    "primary": "#002FA7",
+    "primary_hover": "#00207A",
+    "primary_foreground": "#FFFFFF",
+    "accent_red": "#E63946",
+    "accent_yellow": "#FFC300",
+    "border": "#0A0A0A",
+    "border_subtle": "#E5E5E5",
+    "success": "#10B981"
+  },
+  "typography": {
+    "font_families": {
+      "heading": "'Cabinet Grotesk', sans-serif",
+      "body": "'IBM Plex Sans', sans-serif",
+      "mono": "'JetBrains Mono', monospace"
+    },
+    "scale": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-black",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-bold",
+      "h4": "text-lg sm:text-xl font-bold",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm",
+      "overline": "text-xs uppercase tracking-[0.2em] font-bold"
+    }
+  },
+  "spacing_and_layout": {
+    "strategy": "The 'Control Room' Grid - Dense, functional, asymmetric.",
+    "container_padding": "p-6 md:p-12",
+    "gap_strategy": "gap-6 md:gap-8",
+    "border_radius": "rounded-none md:rounded-[2px]",
+    "alignment": "Left-aligned for all data and inputs. Strict geometric alignment."
+  },
+  "surfaces_and_micro_themes": {
+    "cards": "Flat solid background (surface), 1px or 2px solid border (border), no soft shadows.",
+    "interactive_elements": "Hard offset shadow on hover: `shadow-[4px_4px_0px_rgba(0,0,0,1)]`. On active: translate down/right and remove shadow.",
+    "glassmorphism": "Avoided. Use solid colors to maintain the Swiss Brutalist blueprint aesthetic.",
+    "dashboard_grid": "Grid borders visible. `border-collapse` style for dense data views, separating columns with 1px black borders."
+  },
+  "components": {
+    "button": {
+      "primary": "bg-[#002FA7] text-white border-2 border-[#0A0A0A] font-bold uppercase tracking-wide hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] transition-all",
+      "secondary": "bg-transparent text-[#0A0A0A] border-2 border-[#0A0A0A] font-bold uppercase tracking-wide hover:bg-[#F2F2F2] transition-all",
+      "ghost": "text-[#0A0A0A] font-medium hover:bg-[#F2F2F2] underline-offset-4 hover:underline"
+    },
+    "inputs": {
+      "style": "border-2 border-[#0A0A0A] bg-white p-3 rounded-none focus:ring-0 focus:outline-none focus:border-[#002FA7] font-body",
+      "labels": "font-bold text-sm uppercase tracking-wider mb-2 block text-[#0A0A0A]"
+    },
+    "badges": {
+      "style": "border border-[#0A0A0A] px-2 py-1 text-xs font-mono uppercase bg-white text-[#0A0A0A]"
+    },
+    "paper_preview": {
+      "wrapper": "bg-white border-2 border-[#0A0A0A] p-8 md:p-12 shadow-[8px_8px_0px_rgba(0,0,0,0.1)] relative max-w-4xl mx-auto",
+      "question_item": "border-b border-[#E5E5E5] py-6 last:border-b-0",
+      "question_text": "font-body text-lg",
+      "marks": "font-mono font-bold text-[#0A0A0A] float-right"
+    },
+    "upload_zone": {
+      "style": "border-2 border-dashed border-[#0A0A0A] bg-[#FAFAFA] p-12 text-center hover:bg-[#F2F2F2] transition-colors cursor-pointer flex flex-col items-center justify-center"
+    }
+  },
+  "motion_and_interactions": {
+    "hover": "Translate X/Y with hard shadow reveal. High contrast changes.",
+    "page_transitions": "Instant or very fast fade (0.15s). Utilitarian feel."
+  },
+  "icons_and_assets": {
+    "library": "@phosphor-icons/react",
+    "installation": "yarn add @phosphor-icons/react",
+    "style": "Bold or Duotone weights to match the heavy typography and borders."
+  },
+  "media_urls": {
+    "hero_background": {
+      "url": "https://images.pexels.com/photos/22039140/pexels-photo-22039140.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Simon Fraser University Brutalist architecture",
+      "category": "login_background",
+      "usage": "Use as a stark, dramatic backdrop for the login/registration screen. Overlay with bg-white/80 or bg-[#FAFAFA]/90 to ensure form readability."
+    },
+    "empty_state_graphic": {
+      "url": "https://images.unsplash.com/photo-1656612514884-9d33fcaa8288?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMHdpcmVmcmFtZSUyMGFyY2hpdGVjdHVyZXxlbnwwfHx8fDE3NzYzNjkyNTl8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract wireframe architecture",
+      "category": "empty_state",
+      "usage": "Use in the dashboard when no PDFs are uploaded or no papers are generated. Add a grayscale filter (`grayscale opacity-50`)."
+    },
+    "teacher_avatar_1": {
+      "url": "https://images.unsplash.com/photo-1680104072720-ae824ef15c0e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzV8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMGZhY2V8ZW58MHx8fHwxNzc2MzY5MjU5fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Professional headshot",
+      "category": "user_avatar",
+      "usage": "Placeholder avatar for the logged-in teacher in the header/navigation."
+    }
+  },
+  "accessibility_and_testing": {
+    "contrast": "Ensure all text meets APCA/WCAG AAA due to high contrast theme.",
+    "testing": "All interactive elements MUST include `data-testid` in kebab-case."
+  },
+  "instructions_to_main_agent": [
+    "Use standard HTML tags (`div`, `section`, `h1`) paired with Tailwind for creative layouts, avoiding Shadcn layout cards where possible to maintain the brutalist feel.",
+    "Use Shadcn UI for complex interactives (Select, Slider, Dialog, Tabs) but OVERRIDE their default styles heavily to remove rounded corners, soft shadows, and default grays. Add thick borders.",
+    "The Create Question Paper form should feel like a dense 'control room'. Use a grid layout and place the sliders for question-type distribution closely together.",
+    "The Generated Paper Preview must look like a physical exam paper on a desk. Give it a stark white background, max-width, center alignment, and a hard shadow.",
+    "For the topic/subtopic extraction, use a nested list or a tree view with a monospaced folder-like aesthetic (using Phosphor icons).",
+    "Never use 'Inter' for headings. Strict adherence to Cabinet Grotesk (heading) and IBM Plex Sans (body). Include these via Google Fonts in index.html.",
+    "All components must be functional, error-free, and use the exact colors specified in this guideline."
+  ]
+}
