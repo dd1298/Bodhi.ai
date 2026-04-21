@@ -31,6 +31,7 @@ export default function Dashboard() {
   const [textbooks, setTextbooks] = useState([]);
   const [qbankCount, setQbankCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -41,6 +42,21 @@ export default function Dashboard() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  const bulkGenerateSolutions = async () => {
+    if (!window.confirm("Generate solutions for all papers without one? This may take a while.")) {
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      const { data } = await api.post("/papers/solutions/bulk-generate");
+      toast.success(`Generated ${data.succeeded} solutions (${data.failed} failed)`);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Bulk generation failed");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#FAFAFA]">

@@ -234,6 +234,13 @@ export default function PaperView() {
                 >
                   <PencilSimple size={16} weight="bold" /> Edit
                 </button>
+                <Link
+                  to={`/papers/${id}/solution`}
+                  className="qp-btn qp-btn-secondary"
+                  data-testid="open-solution-button"
+                >
+                  <CheckCircle size={16} weight="bold" /> Solution
+                </Link>
                 <button
                   onClick={() => window.print()}
                   className="qp-btn qp-btn-secondary"
