@@ -163,7 +163,7 @@ export default function Textbooks() {
                 {file ? file.name : "Drop PDF or click to browse"}
               </div>
               <div className="text-xs text-neutral-500 font-mono mt-1">
-                Max 30MB · Textbook chapters recommended
+                Max 500MB · Textbook chapters recommended
               </div>
               <input
                 type="file"

@@ -253,8 +253,8 @@ async def upload_textbook(
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
-    if len(data) > 30 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large (max 30MB)")
+    if len(data) > 500 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 500MB)")
 
     textbook_id = str(uuid.uuid4())
     path = f"{APP_NAME}/textbooks/{user['id']}/{textbook_id}.pdf"
@@ -1161,8 +1161,8 @@ async def upload_qpaper(
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
-    if len(data) > 30 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large (max 30MB)")
+    if len(data) > 500 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 500MB)")
 
     # Save to object storage for audit/traceability
     qpaper_id = str(uuid.uuid4())
