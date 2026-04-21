@@ -43,6 +43,14 @@ export default function PaperView() {
     load();
   }, [id]); // eslint-disable-line
 
+  // Poll for diagram completion when any are still pending.
+  useEffect(() => {
+    if (!paper || editing) return;
+    if ((paper.diagrams_pending || 0) === 0) return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [paper, editing]); // eslint-disable-line
+
   const enterEdit = () => {
     setDraft(JSON.parse(JSON.stringify(paper)));
     setEditing(true);
@@ -457,11 +465,20 @@ export default function PaperView() {
                             </span>
                           )}
                         </div>
-                        {q.diagram_path && (
+                        {q.diagram_path ? (
                           <div className="mt-3 pl-6">
                             <DiagramImage paperId={id} questionId={q.id} />
                           </div>
-                        )}
+                        ) : q.diagram_status === "pending" ? (
+                          <div className="mt-3 pl-6">
+                            <div
+                              className="w-48 h-32 border-2 border-dashed border-neutral-300 flex items-center justify-center text-neutral-500 text-xs bg-neutral-50"
+                              data-testid={`diagram-pending-${q.id}`}
+                            >
+                              <ImageIcon size={18} /> &nbsp; generating diagram...
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                       <div className="no-print flex gap-1 pl-6 md:pl-0">
                         <button

@@ -517,13 +517,15 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
 
     paper_id = str(uuid.uuid4())
 
-    # Generate diagrams in parallel (best-effort)
-    try:
-        sections = await _generate_diagrams_for_paper(
-            paper_id, user["id"], sections
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Diagram pipeline error: {e}")
+    # Mark diagram jobs pending so the UI can show "generating" placeholders.
+    pending_count = 0
+    for s in sections:
+        for q in s.get("questions", []):
+            if q.get("needs_diagram") and q.get("diagram_description"):
+                q["diagram_status"] = "pending"
+                pending_count += 1
+            else:
+                q["diagram_status"] = "none"
 
     paper_doc = {
         "id": paper_id,
@@ -539,12 +541,51 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "distribution": dist,
         "instructions": data.get("instructions", ""),
         "sections": sections,
+        "diagrams_pending": pending_count,
         "created_at": utcnow_iso(),
         "is_deleted": False,
     }
     await db.papers.insert_one(paper_doc)
     paper_doc.pop("_id", None)
+
+    # Kick off diagram generation asynchronously so the user gets the paper
+    # immediately — images populate on polling/refresh.
+    if pending_count > 0:
+        import asyncio as _asyncio
+
+        _asyncio.create_task(
+            _generate_diagrams_background(paper_id, user["id"])
+        )
+
     return paper_doc
+
+
+async def _generate_diagrams_background(paper_id: str, owner_id: str) -> None:
+    """Run diagram generation for a paper and update its sections in-place."""
+    try:
+        p = await db.papers.find_one(
+            {"id": paper_id, "is_deleted": False}, {"_id": 0}
+        )
+        if not p:
+            return
+        sections = p.get("sections", [])
+        sections = await _generate_diagrams_for_paper(paper_id, owner_id, sections)
+        # Mark statuses
+        remaining = 0
+        for s in sections:
+            for q in s.get("questions", []):
+                if q.get("diagram_path"):
+                    q["diagram_status"] = "ready"
+                elif q.get("diagram_status") == "pending":
+                    q["diagram_status"] = "failed"
+                    remaining += 1
+        await db.papers.update_one(
+            {"id": paper_id},
+            {"$set": {"sections": sections, "diagrams_pending": 0}},
+        )
+        logger.info(f"Diagram background job finished for {paper_id}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Diagram background job failed: {e}")
 
 
 @api_router.patch("/papers/{paper_id}")
