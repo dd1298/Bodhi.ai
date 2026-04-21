@@ -30,7 +30,9 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - **Editable papers + feedback loop**: PATCH `/papers/{id}` updates meta + sections; every question edit is logged to `paper_edits` and surfaced to the LLM as "teacher preferences" context in subsequent generations
 - **Diagrams in questions**: LLM flags `needs_diagram`, backend generates PNGs via Gemini Nano Banana in parallel (max 5 per paper), stored in object storage; served via `/papers/{id}/diagrams/{qid}` and embedded in the PDF via reportlab
 - **Upload existing question papers** (teacher + admin): `/qpapers/upload` — PDF parsed via LLM → saved into question bank with `source="uploaded"`; UI card on Question Bank page
-- **Answer-key / Solution feature**: `POST /papers/{id}/solution/generate` (on-demand), `PATCH /papers/{id}/solution` (editable with its own `solution_edits` feedback loop), `GET /papers/{id}/solution/pdf` (separate PDF). Answers tuned per question type: concise for Information, explanation for Concept, step-by-step for Application. Auto `is_stale` flag on paper edit. New `/papers/:id/solution` frontend page.
+- **Answer-key / Solution feature**: `POST /papers/{id}/solution/generate` (on-demand), `PATCH /papers/{id}/solution` (editable with its own `solution_edits` feedback loop), `GET /papers/{id}/solution/pdf` (separate PDF). Answers tuned per question type. Auto `is_stale` flag on paper edit. New `/papers/:id/solution` frontend page.
+- **Bulk solution generation**: `POST /papers/solutions/bulk-generate?only_missing=true|only_stale=true` — processes all of a user's papers in one request. Dashboard CTA "Generate solutions for all papers without one".
+- **Backend full-suite test pass**: testing_agent_v3 verified ALL endpoints @ 100% success rate (auth, textbooks, papers, solutions, qbank, qpapers, diagrams, PDF downloads, auth enforcement).
 
 ## What's Implemented — 2026-02-16
 - JWT auth (register/login/me) with bcrypt
