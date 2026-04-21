@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { useAuth } from "@/context/AuthContext";
+import { toast } from "sonner";
 import {
   Plus,
   FileText,
@@ -10,6 +11,7 @@ import {
   Bookmark,
   Clock,
   ArrowRight,
+  CheckCircle,
 } from "@phosphor-icons/react";
 
 const StatCard = ({ label, value, testid }) => (
@@ -69,6 +71,22 @@ export default function Dashboard() {
               Generate New Paper
             </Link>
           </div>
+          {papers.some((p) => !p.has_solution) && false /* placeholder */}
+          {papers.length > 0 && (
+            <div className="mt-6">
+              <button
+                onClick={bulkGenerateSolutions}
+                disabled={bulkBusy}
+                className="qp-btn qp-btn-secondary text-xs"
+                data-testid="bulk-generate-solutions-button"
+              >
+                <CheckCircle size={14} weight="bold" />
+                {bulkBusy
+                  ? "Generating solutions..."
+                  : "Generate solutions for all papers without one"}
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Stats */}

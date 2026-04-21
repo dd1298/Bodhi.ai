@@ -813,9 +813,64 @@ async def _load_solution_feedback(user_id: str, subject: str, class_name: str) -
     return "\n".join(lines[:10])
 
 
+async def _build_solution_for_paper(paper: dict, user_id: str) -> dict:
+    """Generate a solution for a single paper. Returns the solution dict.
+    Raises HTTPException on failure. Does not persist."""
+    questions_payload = []
+    for s in paper.get("sections", []):
+        for q in s.get("questions", []):
+            if not q.get("question"):
+                continue
+            questions_payload.append({
+                "id": q["id"],
+                "question": q["question"],
+                "type": q.get("type", "concept"),
+                "marks": q.get("marks", 2),
+            })
+    if not questions_payload:
+        raise HTTPException(status_code=400, detail="Paper has no questions to solve")
+
+    tb = await db.textbooks.find_one(
+        {"id": paper.get("textbook_id"), "is_deleted": False}, {"_id": 0}
+    )
+    chunks = (tb or {}).get("chunks") or []
+    context_excerpt = "\n\n".join(chunks[:5])[:8000]
+
+    feedback_hints = await _load_solution_feedback(
+        user_id, paper.get("subject", ""), paper.get("class_name", "")
+    )
+    prompt = solution_prompt(
+        subject=paper.get("subject", ""),
+        klass=paper.get("class_name", ""),
+        context_excerpt=context_excerpt,
+        questions_payload=questions_payload,
+        feedback_hints=feedback_hints,
+    )
+    raw = await chat_complete(system_message=SOLUTION_SYSTEM, user_text=prompt)
+    data = parse_json_response(raw)
+    answers = {
+        a.get("question_id"): (a.get("answer") or "").strip()
+        for a in (data.get("answers") or [])
+    }
+    solution_sections = []
+    for s in paper.get("sections", []):
+        ans_list = []
+        for q in s.get("questions", []):
+            ans_list.append(
+                {"question_id": q["id"], "answer": answers.get(q["id"], "")}
+            )
+        solution_sections.append(
+            {"title": s.get("title", "Section"), "answers": ans_list}
+        )
+    return {
+        "generated_at": utcnow_iso(),
+        "is_stale": False,
+        "sections": solution_sections,
+    }
+
+
 @api_router.post("/papers/{paper_id}/solution/generate")
 async def generate_solution(paper_id: str, user: dict = Depends(get_current_user)):
-    """Generate (or regenerate) the answer-key / solution for a paper."""
     p = await db.papers.find_one(
         {"id": paper_id, "is_deleted": False}, {"_id": 0}
     )
@@ -824,76 +879,71 @@ async def generate_solution(paper_id: str, user: dict = Depends(get_current_user
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    # Collect questions with id+type+marks mapping
-    questions_payload = []
-    for s in p.get("sections", []):
-        for q in s.get("questions", []):
-            if not q.get("question"):
-                continue
-            questions_payload.append(
-                {
-                    "id": q["id"],
-                    "question": q["question"],
-                    "type": q.get("type", "concept"),
-                    "marks": q.get("marks", 2),
-                }
-            )
-    if not questions_payload:
-        raise HTTPException(
-            status_code=400, detail="Paper has no questions to solve"
-        )
-
-    # Textbook context (for style + accuracy)
-    tb = await db.textbooks.find_one(
-        {"id": p.get("textbook_id"), "is_deleted": False}, {"_id": 0}
-    )
-    chunks = (tb or {}).get("chunks") or []
-    context_excerpt = "\n\n".join(chunks[:5])[:8000]
-
-    feedback_hints = await _load_solution_feedback(
-        user["id"], p.get("subject", ""), p.get("class_name", "")
-    )
-    prompt = solution_prompt(
-        subject=p.get("subject", ""),
-        klass=p.get("class_name", ""),
-        context_excerpt=context_excerpt,
-        questions_payload=questions_payload,
-        feedback_hints=feedback_hints,
-    )
     try:
-        raw = await chat_complete(
-            system_message=SOLUTION_SYSTEM,
-            user_text=prompt,
-        )
-        data = parse_json_response(raw)
+        solution = await _build_solution_for_paper(p, user["id"])
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("Solution generation failed")
         raise HTTPException(status_code=502, detail=f"Solution failed: {e}")
 
-    answers = {a.get("question_id"): (a.get("answer") or "").strip() for a in (data.get("answers") or [])}
-
-    # Build solution structure mirroring paper sections
-    solution_sections = []
-    for s in p.get("sections", []):
-        ans_list = []
-        for q in s.get("questions", []):
-            ans_list.append(
-                {
-                    "question_id": q["id"],
-                    "answer": answers.get(q["id"], ""),
-                }
-            )
-        solution_sections.append({"title": s.get("title", "Section"), "answers": ans_list})
-
-    solution = {
-        "generated_at": utcnow_iso(),
-        "is_stale": False,
-        "sections": solution_sections,
-    }
     await db.papers.update_one(
         {"id": paper_id}, {"$set": {"solution": solution}}
     )
     return solution
+
+
+@api_router.post("/papers/solutions/bulk-generate")
+async def bulk_generate_solutions(
+    only_missing: bool = Query(True, description="Skip papers that already have a solution"),
+    only_stale: bool = Query(False, description="Only regenerate papers whose solution is stale"),
+    user: dict = Depends(get_current_user),
+):
+    """Generate solutions for all of the user's existing papers in one pass.
+
+    - `only_missing=true` (default): skip papers that already have a solution (unless stale=true too)
+    - `only_stale=true`: only regenerate papers whose solution is marked stale
+    If both flags are false, all papers get regenerated.
+    """
+    query = {"owner_id": user["id"], "is_deleted": False}
+    papers = await db.papers.find(query, {"_id": 0}).to_list(200)
+
+    queued: list = []
+    for p in papers:
+        has_sol = bool(p.get("solution"))
+        is_stale = bool((p.get("solution") or {}).get("is_stale"))
+        if only_stale:
+            if not is_stale:
+                continue
+        elif only_missing:
+            if has_sol and not is_stale:
+                continue
+        queued.append(p)
+
+    succeeded: list = []
+    failed: list = []
+    for p in queued:
+        try:
+            solution = await _build_solution_for_paper(p, user["id"])
+            await db.papers.update_one(
+                {"id": p["id"]}, {"$set": {"solution": solution}}
+            )
+            succeeded.append({"id": p["id"], "title": p.get("title", "")})
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Bulk solution failed for {p.get('id')}: {e}")
+            failed.append({
+                "id": p["id"],
+                "title": p.get("title", ""),
+                "error": str(e)[:200],
+            })
+
+    return {
+        "processed": len(queued),
+        "succeeded": len(succeeded),
+        "failed": len(failed),
+        "succeeded_items": succeeded,
+        "failed_items": failed,
+    }
 
 
 @api_router.patch("/papers/{paper_id}/solution")
