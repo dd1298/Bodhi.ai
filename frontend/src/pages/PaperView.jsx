@@ -9,6 +9,13 @@ import {
   Download,
   Printer,
   BookmarkSimple,
+  PencilSimple,
+  FloppyDisk,
+  Trash,
+  Plus,
+  X,
+  Image as ImageIcon,
+  CheckCircle,
 } from "@phosphor-icons/react";
 
 const typeBadge = (t) => {
@@ -17,10 +24,15 @@ const typeBadge = (t) => {
   return "qp-badge qp-badge-yellow";
 };
 
+const TYPE_OPTIONS = ["information", "concept", "application"];
+const DIFF_OPTIONS = ["easy", "medium", "hard"];
+
 export default function PaperView() {
   const { id } = useParams();
   const [paper, setPaper] = useState(null);
-  const [downloading, setDownloading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
@@ -31,13 +43,97 @@ export default function PaperView() {
     load();
   }, [id]); // eslint-disable-line
 
+  const enterEdit = () => {
+    setDraft(JSON.parse(JSON.stringify(paper)));
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setDraft(null);
+    setEditing(false);
+  };
+
+  const saveEdit = async () => {
+    setSaving(true);
+    try {
+      const payload = {
+        title: draft.title,
+        instructions: draft.instructions,
+        duration_minutes: Number(draft.duration_minutes),
+        total_marks: Number(draft.total_marks),
+        sections: draft.sections.map((s) => ({
+          title: s.title,
+          questions: s.questions,
+        })),
+      };
+      const { data } = await api.patch(`/papers/${id}`, payload);
+      setPaper(data);
+      setDraft(null);
+      setEditing(false);
+      toast.success("Paper saved — AI will learn from your edits");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateQ = (si, qi, patch) => {
+    const next = { ...draft };
+    next.sections = next.sections.map((s, i) =>
+      i === si
+        ? {
+            ...s,
+            questions: s.questions.map((q, j) =>
+              j === qi ? { ...q, ...patch } : q
+            ),
+          }
+        : s
+    );
+    setDraft(next);
+  };
+
+  const deleteQ = (si, qi) => {
+    const next = { ...draft };
+    next.sections = next.sections.map((s, i) =>
+      i === si
+        ? { ...s, questions: s.questions.filter((_, j) => j !== qi) }
+        : s
+    );
+    setDraft(next);
+  };
+
+  const addQ = (si) => {
+    const next = { ...draft };
+    next.sections = next.sections.map((s, i) =>
+      i === si
+        ? {
+            ...s,
+            questions: [
+              ...s.questions,
+              {
+                id: `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                question: "",
+                type: "concept",
+                difficulty: "medium",
+                marks: 2,
+                important: false,
+                needs_diagram: false,
+              },
+            ],
+          }
+        : s
+    );
+    setDraft(next);
+  };
+
   const toggleImportant = async (qid) => {
     try {
       const { data } = await api.patch(
         `/papers/${id}/question/${qid}/toggle-important`
       );
       setPaper({ ...paper, sections: data.sections });
-    } catch (err) {
+    } catch {
       toast.error("Failed");
     }
   };
@@ -52,29 +148,24 @@ export default function PaperView() {
   };
 
   const download = async () => {
-    setDownloading(true);
     try {
       const token = localStorage.getItem("qp_token");
-      // Fetch as binary, then build a blob URL and click a hidden anchor with the
-      // `download` attribute. Same-origin so `download` is honored by the browser.
       const resp = await fetch(`${API}/papers/${id}/pdf`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const arrayBuffer = await resp.arrayBuffer();
-      const blob = new Blob([arrayBuffer], { type: "application/pdf" });
+      const ab = await resp.arrayBuffer();
+      const blob = new Blob([ab], { type: "application/pdf" });
       const blobUrl = URL.createObjectURL(blob);
       const safeTitle =
         (paper.title || "paper").replace(/[^a-zA-Z0-9_\- ]/g, "").trim() ||
         "paper";
-
       const a = document.createElement("a");
       a.style.display = "none";
       a.href = blobUrl;
       a.download = `${safeTitle}.pdf`;
       document.body.appendChild(a);
       a.click();
-      // Give the browser time to start the download before revoking the blob URL.
       setTimeout(() => {
         try {
           document.body.removeChild(a);
@@ -84,8 +175,6 @@ export default function PaperView() {
       toast.success("Download started");
     } catch (err) {
       toast.error(`Download failed: ${err.message || err}`);
-    } finally {
-      setDownloading(false);
     }
   };
 
@@ -100,6 +189,7 @@ export default function PaperView() {
     );
   }
 
+  const view = editing ? draft : paper;
   let counter = 1;
 
   return (
@@ -116,22 +206,50 @@ export default function PaperView() {
             <ArrowLeft size={16} weight="bold" /> Dashboard
           </Link>
           <div className="flex gap-2">
-            <button
-              onClick={() => window.print()}
-              className="qp-btn qp-btn-secondary"
-              data-testid="print-button"
-            >
-              <Printer size={16} weight="bold" /> Print
-            </button>
-            <button
-              onClick={download}
-              disabled={downloading}
-              className="qp-btn qp-btn-primary"
-              data-testid="download-pdf-button"
-            >
-              <Download size={16} weight="bold" />
-              {downloading ? "Downloading..." : "Download PDF"}
-            </button>
+            {editing ? (
+              <>
+                <button
+                  onClick={cancelEdit}
+                  className="qp-btn qp-btn-secondary"
+                  data-testid="cancel-edit-button"
+                >
+                  <X size={16} weight="bold" /> Cancel
+                </button>
+                <button
+                  onClick={saveEdit}
+                  disabled={saving}
+                  className="qp-btn qp-btn-primary"
+                  data-testid="save-edit-button"
+                >
+                  <FloppyDisk size={16} weight="bold" />
+                  {saving ? "Saving..." : "Save"}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={enterEdit}
+                  className="qp-btn qp-btn-secondary"
+                  data-testid="enter-edit-button"
+                >
+                  <PencilSimple size={16} weight="bold" /> Edit
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="qp-btn qp-btn-secondary"
+                  data-testid="print-button"
+                >
+                  <Printer size={16} weight="bold" /> Print
+                </button>
+                <button
+                  onClick={download}
+                  className="qp-btn qp-btn-primary"
+                  data-testid="download-pdf-button"
+                >
+                  <Download size={16} weight="bold" /> Download PDF
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -141,32 +259,166 @@ export default function PaperView() {
           data-testid="paper-preview"
         >
           <div className="text-center border-b-2 border-black pb-6 mb-6">
-            <h1 className="font-display text-3xl md:text-4xl">{paper.title}</h1>
+            {editing ? (
+              <input
+                value={view.title}
+                onChange={(e) =>
+                  setDraft({ ...draft, title: e.target.value })
+                }
+                className="qp-input text-center font-display text-3xl md:text-4xl"
+                data-testid="edit-title-input"
+              />
+            ) : (
+              <h1 className="font-display text-3xl md:text-4xl">
+                {view.title}
+              </h1>
+            )}
             <div className="mt-3 font-mono text-sm text-neutral-700">
-              Class <b>{paper.class_name}</b> · Subject <b>{paper.subject}</b>
+              Class <b>{view.class_name}</b> · Subject <b>{view.subject}</b>
             </div>
-            <div className="mt-1 font-mono text-sm text-neutral-700">
-              Total Marks: <b>{paper.total_marks}</b> · Duration:{" "}
-              <b>{paper.duration_minutes} min</b> · Difficulty:{" "}
-              <b className="uppercase">{paper.difficulty}</b>
+            <div className="mt-1 font-mono text-sm text-neutral-700 flex flex-wrap gap-3 justify-center items-center">
+              <span>
+                Total Marks:{" "}
+                {editing ? (
+                  <input
+                    type="number"
+                    value={view.total_marks}
+                    onChange={(e) =>
+                      setDraft({ ...draft, total_marks: e.target.value })
+                    }
+                    className="qp-input inline-block w-20 py-1 text-sm"
+                    data-testid="edit-marks-input"
+                  />
+                ) : (
+                  <b>{view.total_marks}</b>
+                )}
+              </span>
+              <span>
+                Duration:{" "}
+                {editing ? (
+                  <input
+                    type="number"
+                    value={view.duration_minutes}
+                    onChange={(e) =>
+                      setDraft({ ...draft, duration_minutes: e.target.value })
+                    }
+                    className="qp-input inline-block w-20 py-1 text-sm"
+                    data-testid="edit-duration-input"
+                  />
+                ) : (
+                  <b>{view.duration_minutes} min</b>
+                )}
+              </span>
+              <span>
+                Difficulty:{" "}
+                <b className="uppercase">{view.difficulty}</b>
+              </span>
             </div>
           </div>
 
-          {paper.instructions && (
-            <div className="mb-6 border border-neutral-300 bg-neutral-50 p-4 text-sm">
-              <span className="font-bold">Instructions: </span>
-              {paper.instructions}
-            </div>
+          {editing ? (
+            <textarea
+              value={view.instructions || ""}
+              onChange={(e) =>
+                setDraft({ ...draft, instructions: e.target.value })
+              }
+              className="qp-input w-full mb-6"
+              rows={2}
+              placeholder="Instructions (e.g., attempt all questions)"
+              data-testid="edit-instructions-input"
+            />
+          ) : (
+            view.instructions && (
+              <div className="mb-6 border border-neutral-300 bg-neutral-50 p-4 text-sm">
+                <span className="font-bold">Instructions: </span>
+                {view.instructions}
+              </div>
+            )
           )}
 
-          {(paper.sections || []).map((section, si) => (
+          {(view.sections || []).map((section, si) => (
             <section key={si} className="mb-8" data-testid={`section-${si}`}>
               <h2 className="font-display text-xl md:text-2xl text-[#002FA7] mb-4 border-b border-neutral-300 pb-2">
                 {section.title}
               </h2>
               <ol className="space-y-4">
-                {(section.questions || []).map((q) => {
+                {(section.questions || []).map((q, qi) => {
                   const qNum = counter++;
+                  if (editing) {
+                    return (
+                      <li
+                        key={q.id}
+                        className="border-2 border-neutral-300 p-4"
+                        data-testid={`edit-question-${q.id}`}
+                      >
+                        <div className="flex items-start gap-2 mb-2">
+                          <span className="font-bold pt-2">Q{qNum}.</span>
+                          <textarea
+                            value={q.question}
+                            onChange={(e) =>
+                              updateQ(si, qi, { question: e.target.value })
+                            }
+                            className="qp-input flex-1"
+                            rows={2}
+                            data-testid={`edit-q-text-${q.id}`}
+                          />
+                          <button
+                            onClick={() => deleteQ(si, qi)}
+                            className="qp-btn qp-btn-secondary text-xs shrink-0"
+                            data-testid={`edit-q-delete-${q.id}`}
+                          >
+                            <Trash size={14} weight="bold" />
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 mt-2 pl-6">
+                          <select
+                            value={q.type}
+                            onChange={(e) =>
+                              updateQ(si, qi, { type: e.target.value })
+                            }
+                            className="qp-input text-sm py-1"
+                            data-testid={`edit-q-type-${q.id}`}
+                          >
+                            {TYPE_OPTIONS.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={q.difficulty}
+                            onChange={(e) =>
+                              updateQ(si, qi, { difficulty: e.target.value })
+                            }
+                            className="qp-input text-sm py-1"
+                            data-testid={`edit-q-diff-${q.id}`}
+                          >
+                            {DIFF_OPTIONS.map((d) => (
+                              <option key={d} value={d}>
+                                {d}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            value={q.marks}
+                            onChange={(e) =>
+                              updateQ(si, qi, {
+                                marks: Number(e.target.value),
+                              })
+                            }
+                            className="qp-input text-sm py-1"
+                            data-testid={`edit-q-marks-${q.id}`}
+                          />
+                        </div>
+                        {q.diagram_path && (
+                          <div className="mt-3 pl-6">
+                            <DiagramImage paperId={id} questionId={q.id} />
+                          </div>
+                        )}
+                      </li>
+                    );
+                  }
                   return (
                     <li
                       key={q.id}
@@ -192,15 +444,23 @@ export default function PaperView() {
                         <div className="mt-2 flex flex-wrap gap-1 pl-6">
                           <span className={typeBadge(q.type)}>{q.type}</span>
                           <span className="qp-badge">{q.difficulty}</span>
+                          {q.diagram_path && (
+                            <span className="qp-badge">
+                              <ImageIcon size={10} weight="bold" /> diagram
+                            </span>
+                          )}
                         </div>
+                        {q.diagram_path && (
+                          <div className="mt-3 pl-6">
+                            <DiagramImage paperId={id} questionId={q.id} />
+                          </div>
+                        )}
                       </div>
                       <div className="no-print flex gap-1 pl-6 md:pl-0">
                         <button
                           onClick={() => toggleImportant(q.id)}
                           className={`qp-btn ${
-                            q.important
-                              ? "qp-btn-primary"
-                              : "qp-btn-secondary"
+                            q.important ? "qp-btn-primary" : "qp-btn-secondary"
                           } text-xs`}
                           data-testid={`toggle-important-${q.id}`}
                           title="Mark important"
@@ -223,6 +483,15 @@ export default function PaperView() {
                   );
                 })}
               </ol>
+              {editing && (
+                <button
+                  onClick={() => addQ(si)}
+                  className="qp-btn qp-btn-secondary text-xs mt-3"
+                  data-testid={`add-question-${si}`}
+                >
+                  <Plus size={14} weight="bold" /> Add question
+                </button>
+              )}
             </section>
           ))}
 
@@ -234,3 +503,42 @@ export default function PaperView() {
     </div>
   );
 }
+
+// Fetches the diagram as a blob URL so the auth token can be sent via header.
+const DiagramImage = ({ paperId, questionId }) => {
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    let revoked = false;
+    let currentUrl = null;
+    const token = localStorage.getItem("qp_token");
+    fetch(`${API}/papers/${paperId}/diagrams/${questionId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((blob) => {
+        if (!blob || revoked) return;
+        currentUrl = URL.createObjectURL(blob);
+        setSrc(currentUrl);
+      })
+      .catch(() => {});
+    return () => {
+      revoked = true;
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+    };
+  }, [paperId, questionId]);
+  if (!src) {
+    return (
+      <div className="w-48 h-48 border-2 border-dashed border-neutral-300 flex items-center justify-center text-neutral-400 text-xs">
+        <ImageIcon size={18} /> &nbsp; diagram loading...
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt="diagram"
+      className="max-w-xs border border-neutral-300 bg-white"
+      data-testid={`diagram-${questionId}`}
+    />
+  );
+};

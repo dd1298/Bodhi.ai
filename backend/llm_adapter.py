@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import uuid
+import base64
 from typing import Any
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -16,6 +17,8 @@ PROVIDER_CHAIN = [
     ("openai", "gpt-5.2"),
     ("anthropic", "claude-sonnet-4-5-20250929"),
 ]
+
+DIAGRAM_MODEL = "gemini-3.1-flash-image-preview"
 
 
 async def chat_complete(system_message: str, user_text: str) -> str:
@@ -42,6 +45,38 @@ async def chat_complete(system_message: str, user_text: str) -> str:
             last_err = e
             continue
     raise RuntimeError(f"All LLM providers failed: {last_err}")
+
+
+async def generate_diagram(description: str) -> bytes | None:
+    """Generate a clean B&W line diagram for an exam question. Returns PNG bytes
+    or None on failure. Non-raising — diagrams are best-effort."""
+    try:
+        session_id = f"qpgen-diag-{uuid.uuid4()}"
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=session_id,
+            system_message=(
+                "You generate clean, minimal black-and-white line diagrams "
+                "for exam papers. Use clear labels, simple geometric shapes, "
+                "no color, white background."
+            ),
+        ).with_model("gemini", DIAGRAM_MODEL).with_params(modalities=["image", "text"])
+        prompt = (
+            f"Create a simple, clean black-and-white line diagram for a school exam. "
+            f"Subject/figure: {description}. "
+            f"Requirements: white background, crisp black lines, minimal labels, "
+            f"textbook/exam-paper style, no shading, no color, no watermark, no photo. "
+            f"Keep it uncluttered and suitable for printing in an exam paper."
+        )
+        msg = UserMessage(text=prompt)
+        _text, images = await chat.send_message_multimodal_response(msg)
+        if images:
+            img_b64 = images[0]["data"]
+            return base64.b64decode(img_b64)
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Diagram generation failed for '{description[:40]}': {e}")
+        return None
 
 
 def parse_json_response(text: str) -> Any:

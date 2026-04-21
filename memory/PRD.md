@@ -26,6 +26,12 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Provider fallback chain for LLMs
 - PDF export of the generated paper
 
+## What's Implemented — 2026-04-21 (Enhancements)
+- **Editable papers + feedback loop**: PATCH `/papers/{id}` updates meta + sections; every question edit is logged to `paper_edits` and surfaced to the LLM as "teacher preferences" context in subsequent generations
+- **Diagrams in questions**: LLM flags `needs_diagram`, backend generates PNGs via Gemini Nano Banana in parallel (max 5 per paper), stored in object storage; served via `/papers/{id}/diagrams/{qid}` and embedded in the PDF via reportlab
+- **Upload existing question papers** (teacher + admin): `/qpapers/upload` — PDF parsed via LLM → saved into question bank with `source="uploaded"`; UI card on Question Bank page
+- **Answer-key / Solution feature**: `POST /papers/{id}/solution/generate` (on-demand), `PATCH /papers/{id}/solution` (editable with its own `solution_edits` feedback loop), `GET /papers/{id}/solution/pdf` (separate PDF). Answers tuned per question type: concise for Information, explanation for Concept, step-by-step for Application. Auto `is_stale` flag on paper edit. New `/papers/:id/solution` frontend page.
+
 ## What's Implemented — 2026-02-16
 - JWT auth (register/login/me) with bcrypt
 - Emergent object storage for PDFs + MongoDB metadata

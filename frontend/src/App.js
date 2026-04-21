@@ -11,6 +11,7 @@ import Dashboard from "@/pages/Dashboard";
 import Textbooks from "@/pages/Textbooks";
 import NewPaper from "@/pages/NewPaper";
 import PaperView from "@/pages/PaperView";
+import SolutionView from "@/pages/SolutionView";
 import QBank from "@/pages/QBank";
 
 function App() {
@@ -62,6 +63,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PaperView />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/papers/:id/solution"
+              element={
+                <ProtectedRoute>
+                  <SolutionView />
                 </ProtectedRoute>
               }
             />

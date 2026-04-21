@@ -34,9 +34,16 @@ from auth import (
     require_role,
     verify_password,
 )
-from llm_adapter import chat_complete, parse_json_response
-from pdf_utils import chunk_text, extract_text, render_paper_pdf
-from prompts import qgen_prompt, topic_extract_prompt
+from llm_adapter import chat_complete, generate_diagram, parse_json_response
+from pdf_utils import chunk_text, extract_text, render_paper_pdf, render_solution_pdf
+from prompts import (
+    qgen_prompt,
+    qpaper_extract_prompt,
+    solution_prompt,
+    topic_extract_prompt,
+    QPAPER_EXTRACT_SYSTEM,
+    SOLUTION_SYSTEM,
+)
 from storage import APP_NAME, get_object, init_storage, put_object
 
 logging.basicConfig(
@@ -114,6 +121,42 @@ class QuestionInput(BaseModel):
     difficulty: str = "medium"
     marks: int = 2
     topic: Optional[str] = None
+
+
+class QuestionUpdate(BaseModel):
+    id: str
+    question: Optional[str] = None
+    type: Optional[str] = None
+    difficulty: Optional[str] = None
+    marks: Optional[int] = None
+    important: Optional[bool] = None
+
+
+class SectionUpdate(BaseModel):
+    title: str
+    questions: List[dict]  # full question dicts
+
+
+class PaperUpdate(BaseModel):
+    title: Optional[str] = None
+    instructions: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    total_marks: Optional[int] = None
+    sections: Optional[List[SectionUpdate]] = None
+
+
+class AnswerUpdate(BaseModel):
+    question_id: str
+    answer: str
+
+
+class SolutionSectionUpdate(BaseModel):
+    title: str
+    answers: List[AnswerUpdate]
+
+
+class SolutionPatch(BaseModel):
+    sections: List[SolutionSectionUpdate]
 
 
 # =========================================================
@@ -339,6 +382,80 @@ async def delete_textbook(textbook_id: str, user: dict = Depends(get_current_use
 # =========================================================
 # Papers
 # =========================================================
+async def _load_feedback_hints(user_id: str, subject: str, class_name: str) -> str:
+    """Build a short feedback-hints block from recent user edits.
+
+    We pull the most recent modify/add edits for the same subject+class and
+    summarise them so the LLM can adapt future generations to teacher style."""
+    try:
+        edits = (
+            await db.paper_edits.find(
+                {
+                    "owner_id": user_id,
+                    "subject": subject,
+                    "class_name": class_name,
+                },
+                {"_id": 0},
+            )
+            .sort("created_at", -1)
+            .to_list(8)
+        )
+    except Exception:
+        return ""
+    if not edits:
+        return ""
+    lines = []
+    for e in edits:
+        kind = e.get("edit_type")
+        if kind == "modify_question":
+            orig = (e.get("original") or "")[:150]
+            new = (e.get("revised") or "")[:150]
+            if orig and new:
+                lines.append(f"- TEACHER REPHRASED: '{orig}'  →  '{new}'")
+        elif kind == "delete_question":
+            q = (e.get("original") or "")[:150]
+            if q:
+                lines.append(f"- TEACHER REMOVED style: '{q}' (avoid similar)")
+        elif kind == "add_question":
+            q = (e.get("revised") or "")[:150]
+            if q:
+                lines.append(f"- TEACHER ADDED style: '{q}' (prefer similar)")
+    return "\n".join(lines[:10])
+
+
+async def _generate_diagrams_for_paper(paper_id: str, owner_id: str, sections: list) -> list:
+    """Generate diagrams (in parallel) for questions with needs_diagram=true.
+
+    Saves PNGs to object storage and attaches `diagram_path` to each question.
+    Best-effort: a failed diagram leaves the question without an image.
+    """
+    import asyncio as _asyncio
+
+    jobs = []
+    targets = []
+    for s in sections:
+        for q in s.get("questions", []):
+            if q.get("needs_diagram") and q.get("diagram_description"):
+                targets.append(q)
+                jobs.append(generate_diagram(q["diagram_description"]))
+    if not jobs:
+        return sections
+    # Cap concurrency at 5 diagrams to avoid stalls
+    jobs = jobs[:5]
+    targets = targets[:5]
+    results = await _asyncio.gather(*jobs, return_exceptions=True)
+    for q, img_bytes in zip(targets, results):
+        if isinstance(img_bytes, Exception) or not img_bytes:
+            continue
+        try:
+            path = f"{APP_NAME}/diagrams/{owner_id}/{paper_id}/{q['id']}.png"
+            saved = put_object(path, img_bytes, "image/png")
+            q["diagram_path"] = saved["path"]
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to save diagram: {e}")
+    return sections
+
+
 @api_router.post("/papers/generate")
 async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_user)):
     dist = req.distribution or {}
@@ -359,6 +476,10 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     chunks = tb.get("chunks") or []
     context_excerpt = "\n\n".join(chunks[:6])[:10000]
 
+    feedback_hints = await _load_feedback_hints(
+        user["id"], req.subject, req.class_name
+    )
+
     prompt = qgen_prompt(
         subject=req.subject,
         klass=req.class_name,
@@ -368,6 +489,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         total_marks=req.total_marks,
         duration=req.duration_minutes,
         context_excerpt=context_excerpt,
+        feedback_hints=feedback_hints,
     )
     try:
         raw = await chat_complete(
@@ -391,8 +513,18 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
             q.setdefault("marks", 2)
             q.setdefault("type", "concept")
             q.setdefault("difficulty", req.difficulty)
+            q.setdefault("needs_diagram", False)
 
     paper_id = str(uuid.uuid4())
+
+    # Generate diagrams in parallel (best-effort)
+    try:
+        sections = await _generate_diagrams_for_paper(
+            paper_id, user["id"], sections
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Diagram pipeline error: {e}")
+
     paper_doc = {
         "id": paper_id,
         "owner_id": user["id"],
@@ -413,6 +545,100 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     await db.papers.insert_one(paper_doc)
     paper_doc.pop("_id", None)
     return paper_doc
+
+
+@api_router.patch("/papers/{paper_id}")
+async def update_paper(
+    paper_id: str,
+    update: PaperUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Edit paper content (title, meta, questions). Logs each question-level
+    change into `paper_edits` for the AI feedback loop."""
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    set_fields: dict = {}
+    if update.title is not None:
+        set_fields["title"] = update.title
+    if update.instructions is not None:
+        set_fields["instructions"] = update.instructions
+    if update.duration_minutes is not None:
+        set_fields["duration_minutes"] = int(update.duration_minutes)
+    if update.total_marks is not None:
+        set_fields["total_marks"] = int(update.total_marks)
+
+    if update.sections is not None:
+        old_qs = {
+            q["id"]: q for s in p.get("sections", []) for q in s.get("questions", [])
+        }
+        new_sections = []
+        new_ids = set()
+        for s in update.sections:
+            clean_qs = []
+            for q in s.questions:
+                if not q.get("id"):
+                    q["id"] = str(uuid.uuid4())
+                q.setdefault("important", False)
+                q.setdefault("marks", 2)
+                q.setdefault("type", "concept")
+                q.setdefault("difficulty", "medium")
+                q.setdefault("needs_diagram", False)
+                clean_qs.append(q)
+                new_ids.add(q["id"])
+                prev = old_qs.get(q["id"])
+                if prev is None:
+                    # Added
+                    await db.paper_edits.insert_one({
+                        "paper_id": paper_id,
+                        "owner_id": user["id"],
+                        "subject": p.get("subject", ""),
+                        "class_name": p.get("class_name", ""),
+                        "edit_type": "add_question",
+                        "revised": q.get("question", ""),
+                        "created_at": utcnow_iso(),
+                    })
+                elif prev.get("question") != q.get("question"):
+                    await db.paper_edits.insert_one({
+                        "paper_id": paper_id,
+                        "owner_id": user["id"],
+                        "subject": p.get("subject", ""),
+                        "class_name": p.get("class_name", ""),
+                        "edit_type": "modify_question",
+                        "original": prev.get("question", ""),
+                        "revised": q.get("question", ""),
+                        "created_at": utcnow_iso(),
+                    })
+            new_sections.append({"title": s.title, "questions": clean_qs})
+
+        # Detect deletions
+        for qid, prev in old_qs.items():
+            if qid not in new_ids:
+                await db.paper_edits.insert_one({
+                    "paper_id": paper_id,
+                    "owner_id": user["id"],
+                    "subject": p.get("subject", ""),
+                    "class_name": p.get("class_name", ""),
+                    "edit_type": "delete_question",
+                    "original": prev.get("question", ""),
+                    "created_at": utcnow_iso(),
+                })
+        set_fields["sections"] = new_sections
+
+        # If a solution already exists, mark it stale so the UI prompts the
+        # teacher to regenerate.
+        if p.get("solution"):
+            set_fields["solution.is_stale"] = True
+
+    if set_fields:
+        await db.papers.update_one({"id": paper_id}, {"$set": set_fields})
+    updated = await db.papers.find_one({"id": paper_id}, {"_id": 0})
+    return updated
 
 
 @api_router.get("/papers")
@@ -479,7 +705,6 @@ async def paper_pdf(
     authorization: Optional[str] = Header(None),
     auth: Optional[str] = Query(None),
 ):
-    # Support either Authorization header or ?auth= query param (for direct download links)
     token = None
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1]
@@ -498,13 +723,283 @@ async def paper_pdf(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user_id and role != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    pdf_bytes = render_paper_pdf(p)
+
+    def _diagram_loader(_qid: str, path: str):
+        try:
+            data, _ct = get_object(path)
+            return data
+        except Exception:
+            return None
+
+    pdf_bytes = render_paper_pdf(p, diagram_loader=_diagram_loader)
     safe_title = "".join(c for c in p["title"] if c.isalnum() or c in (" ", "-", "_")).strip()[:60] or "paper"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="{safe_title}.pdf"'
+        },
+    )
+
+
+@api_router.get("/papers/{paper_id}/diagrams/{question_id}")
+async def paper_diagram(
+    paper_id: str,
+    question_id: str,
+    authorization: Optional[str] = Header(None),
+    auth: Optional[str] = Query(None),
+):
+    """Serve a question diagram PNG from object storage. Accepts either
+    Authorization header or ?auth= query param (so <img src> works)."""
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1]
+    elif auth:
+        token = auth
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    payload = decode_token(token)
+    user_id = payload["sub"]
+    role = payload.get("role", "teacher")
+
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user_id and role != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    path = None
+    for s in p.get("sections", []):
+        for q in s.get("questions", []):
+            if q.get("id") == question_id:
+                path = q.get("diagram_path")
+                break
+    if not path:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+    data, ct = get_object(path)
+    return Response(content=data, media_type=ct or "image/png")
+
+
+# =========================================================
+# Solutions (answer keys)
+# =========================================================
+async def _load_solution_feedback(user_id: str, subject: str, class_name: str) -> str:
+    try:
+        edits = (
+            await db.solution_edits.find(
+                {
+                    "owner_id": user_id,
+                    "subject": subject,
+                    "class_name": class_name,
+                },
+                {"_id": 0},
+            )
+            .sort("created_at", -1)
+            .to_list(8)
+        )
+    except Exception:
+        return ""
+    if not edits:
+        return ""
+    lines = []
+    for e in edits:
+        orig = (e.get("original") or "")[:180]
+        new = (e.get("revised") or "")[:180]
+        if orig and new:
+            lines.append(
+                f"- TEACHER REWORDED ANSWER: '{orig}'  →  '{new}'"
+            )
+    return "\n".join(lines[:10])
+
+
+@api_router.post("/papers/{paper_id}/solution/generate")
+async def generate_solution(paper_id: str, user: dict = Depends(get_current_user)):
+    """Generate (or regenerate) the answer-key / solution for a paper."""
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Collect questions with id+type+marks mapping
+    questions_payload = []
+    for s in p.get("sections", []):
+        for q in s.get("questions", []):
+            if not q.get("question"):
+                continue
+            questions_payload.append(
+                {
+                    "id": q["id"],
+                    "question": q["question"],
+                    "type": q.get("type", "concept"),
+                    "marks": q.get("marks", 2),
+                }
+            )
+    if not questions_payload:
+        raise HTTPException(
+            status_code=400, detail="Paper has no questions to solve"
+        )
+
+    # Textbook context (for style + accuracy)
+    tb = await db.textbooks.find_one(
+        {"id": p.get("textbook_id"), "is_deleted": False}, {"_id": 0}
+    )
+    chunks = (tb or {}).get("chunks") or []
+    context_excerpt = "\n\n".join(chunks[:5])[:8000]
+
+    feedback_hints = await _load_solution_feedback(
+        user["id"], p.get("subject", ""), p.get("class_name", "")
+    )
+    prompt = solution_prompt(
+        subject=p.get("subject", ""),
+        klass=p.get("class_name", ""),
+        context_excerpt=context_excerpt,
+        questions_payload=questions_payload,
+        feedback_hints=feedback_hints,
+    )
+    try:
+        raw = await chat_complete(
+            system_message=SOLUTION_SYSTEM,
+            user_text=prompt,
+        )
+        data = parse_json_response(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Solution generation failed")
+        raise HTTPException(status_code=502, detail=f"Solution failed: {e}")
+
+    answers = {a.get("question_id"): (a.get("answer") or "").strip() for a in (data.get("answers") or [])}
+
+    # Build solution structure mirroring paper sections
+    solution_sections = []
+    for s in p.get("sections", []):
+        ans_list = []
+        for q in s.get("questions", []):
+            ans_list.append(
+                {
+                    "question_id": q["id"],
+                    "answer": answers.get(q["id"], ""),
+                }
+            )
+        solution_sections.append({"title": s.get("title", "Section"), "answers": ans_list})
+
+    solution = {
+        "generated_at": utcnow_iso(),
+        "is_stale": False,
+        "sections": solution_sections,
+    }
+    await db.papers.update_one(
+        {"id": paper_id}, {"$set": {"solution": solution}}
+    )
+    return solution
+
+
+@api_router.patch("/papers/{paper_id}/solution")
+async def update_solution(
+    paper_id: str,
+    update: SolutionPatch,
+    user: dict = Depends(get_current_user),
+):
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    current = p.get("solution") or {}
+    if not current.get("sections"):
+        raise HTTPException(
+            status_code=400,
+            detail="No solution exists yet. Generate it first.",
+        )
+
+    # Log edits (feedback loop)
+    old_answers = {
+        a.get("question_id"): (a.get("answer") or "")
+        for sec in current.get("sections", [])
+        for a in sec.get("answers", [])
+    }
+    new_sections = []
+    for s in update.sections:
+        new_answers = []
+        for a in s.answers:
+            old = old_answers.get(a.question_id, "")
+            if old != a.answer:
+                await db.solution_edits.insert_one({
+                    "paper_id": paper_id,
+                    "owner_id": user["id"],
+                    "subject": p.get("subject", ""),
+                    "class_name": p.get("class_name", ""),
+                    "question_id": a.question_id,
+                    "original": old,
+                    "revised": a.answer,
+                    "created_at": utcnow_iso(),
+                })
+            new_answers.append(
+                {"question_id": a.question_id, "answer": a.answer}
+            )
+        new_sections.append({"title": s.title, "answers": new_answers})
+
+    updated_solution = {
+        "generated_at": current.get("generated_at"),
+        "edited_at": utcnow_iso(),
+        "is_stale": False,
+        "sections": new_sections,
+    }
+    await db.papers.update_one(
+        {"id": paper_id}, {"$set": {"solution": updated_solution}}
+    )
+    return updated_solution
+
+
+@api_router.get("/papers/{paper_id}/solution/pdf")
+async def solution_pdf(
+    paper_id: str,
+    authorization: Optional[str] = Header(None),
+    auth: Optional[str] = Query(None),
+):
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1]
+    elif auth:
+        token = auth
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    payload = decode_token(token)
+    user_id = payload["sub"]
+    role = payload.get("role", "teacher")
+
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user_id and role != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not p.get("solution"):
+        raise HTTPException(status_code=400, detail="No solution generated yet")
+
+    def _diagram_loader(_qid: str, path: str):
+        try:
+            data, _ct = get_object(path)
+            return data
+        except Exception:
+            return None
+
+    pdf_bytes = render_solution_pdf(p, diagram_loader=_diagram_loader)
+    safe_title = (
+        "".join(c for c in p["title"] if c.isalnum() or c in (" ", "-", "_"))
+        .strip()[:60]
+        or "paper"
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_title} - Solution.pdf"'
         },
     )
 
@@ -593,6 +1088,96 @@ async def delete_qbank(qid: str, user: dict = Depends(get_current_user)):
         {"id": qid, "owner_id": user["id"]}, {"$set": {"is_deleted": True}}
     )
     return {"ok": True}
+
+
+# =========================================================
+# Upload existing question papers (teacher & admin)
+# =========================================================
+@api_router.post("/qpapers/upload")
+async def upload_qpaper(
+    file: UploadFile = File(...),
+    subject: Optional[str] = Query(None),
+    class_name: Optional[str] = Query(None),
+    user: dict = Depends(get_current_user),
+):
+    """Upload an existing question-paper PDF. The system parses the PDF,
+    extracts individual questions via the LLM and adds them to the user's
+    question bank. Both teachers and admins can use this."""
+    if user["role"] not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > 30 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 30MB)")
+
+    # Save to object storage for audit/traceability
+    qpaper_id = str(uuid.uuid4())
+    path = f"{APP_NAME}/qpapers/{user['id']}/{qpaper_id}.pdf"
+    try:
+        put_object(path, data, "application/pdf")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Storage save failed (non-fatal): {e}")
+
+    try:
+        text = extract_text(data)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not read PDF: {e}")
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="No text found in PDF")
+
+    excerpt = text[:14000]
+    try:
+        raw = await chat_complete(
+            system_message=QPAPER_EXTRACT_SYSTEM,
+            user_text=qpaper_extract_prompt(excerpt),
+        )
+        parsed = parse_json_response(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Question-paper extraction failed")
+        raise HTTPException(status_code=502, detail=f"Extraction failed: {e}")
+
+    questions = parsed.get("questions") or []
+    subject = subject or parsed.get("subject") or ""
+    class_name = class_name or parsed.get("class_name") or ""
+
+    saved = 0
+    saved_docs = []
+    for q in questions:
+        text_q = (q.get("question") or "").strip()
+        if not text_q:
+            continue
+        doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "question": text_q,
+            "type": q.get("type") or "concept",
+            "difficulty": q.get("difficulty") or "medium",
+            "marks": int(q.get("marks") or 2),
+            "subject": subject,
+            "class_name": class_name,
+            "topics": [],
+            "source": "uploaded",
+            "source_file": file.filename,
+            "important": False,
+            "created_at": utcnow_iso(),
+            "is_deleted": False,
+        }
+        await db.qbank.insert_one(doc)
+        doc.pop("_id", None)
+        saved_docs.append(doc)
+        saved += 1
+
+    return {
+        "saved": saved,
+        "subject": subject,
+        "class_name": class_name,
+        "filename": file.filename,
+        "questions": saved_docs[:100],
+    }
 
 
 # =========================================================
