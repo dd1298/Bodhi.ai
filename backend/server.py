@@ -873,7 +873,12 @@ async def _load_solution_feedback(user_id: str, subject: str, class_name: str) -
 
 async def _build_solution_for_paper(paper: dict, user_id: str) -> dict:
     """Generate a solution for a single paper. Returns the solution dict.
-    Raises HTTPException on failure. Does not persist."""
+    Raises HTTPException on failure. Does not persist.
+
+    Questions are processed in batches of 5 so long/hard papers don't blow
+    past LLM token limits or trigger gateway timeouts."""
+    BATCH_SIZE = 5
+
     questions_payload = []
     for s in paper.get("sections", []):
         for q in s.get("questions", []):
@@ -897,19 +902,46 @@ async def _build_solution_for_paper(paper: dict, user_id: str) -> dict:
     feedback_hints = await _load_solution_feedback(
         user_id, paper.get("subject", ""), paper.get("class_name", "")
     )
-    prompt = solution_prompt(
-        subject=paper.get("subject", ""),
-        klass=paper.get("class_name", ""),
-        context_excerpt=context_excerpt,
-        questions_payload=questions_payload,
-        feedback_hints=feedback_hints,
-    )
-    raw = await chat_complete(system_message=SOLUTION_SYSTEM, user_text=prompt)
-    data = parse_json_response(raw)
-    answers = {
-        a.get("question_id"): (a.get("answer") or "").strip()
-        for a in (data.get("answers") or [])
-    }
+
+    answers: dict[str, str] = {}
+    last_err: Exception | None = None
+    n_batches = (len(questions_payload) + BATCH_SIZE - 1) // BATCH_SIZE
+    for bi in range(n_batches):
+        batch = questions_payload[bi * BATCH_SIZE : (bi + 1) * BATCH_SIZE]
+        prompt = solution_prompt(
+            subject=paper.get("subject", ""),
+            klass=paper.get("class_name", ""),
+            context_excerpt=context_excerpt,
+            questions_payload=batch,
+            feedback_hints=feedback_hints,
+        )
+        for attempt in range(2):  # 1 retry on transient failure
+            try:
+                raw = await chat_complete(
+                    system_message=SOLUTION_SYSTEM, user_text=prompt
+                )
+                data = parse_json_response(raw)
+                for a in data.get("answers") or []:
+                    qid = a.get("question_id")
+                    text = (a.get("answer") or "").strip()
+                    if qid and text:
+                        answers[qid] = text
+                last_err = None
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                logger.warning(
+                    f"Solution batch {bi + 1}/{n_batches} attempt {attempt + 1} failed: {e}"
+                )
+        # Continue with next batch even if this one failed — partial solutions
+        # are still useful; missing answers will simply be empty strings.
+
+    if not answers and last_err:
+        # All batches failed.
+        raise HTTPException(
+            status_code=502, detail=f"Solution failed: {last_err}"
+        )
+
     solution_sections = []
     for s in paper.get("sections", []):
         ans_list = []

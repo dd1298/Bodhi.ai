@@ -80,7 +80,9 @@ async def generate_diagram(description: str) -> bytes | None:
 
 
 def parse_json_response(text: str) -> Any:
-    """Extract a JSON payload from an LLM response, tolerating code fences and prose."""
+    """Extract a JSON payload from an LLM response, tolerating code fences,
+    prose, and partial/truncated output (will salvage a complete answers array
+    from a truncated solution response)."""
     if not text:
         raise ValueError("Empty LLM response")
 
@@ -105,5 +107,30 @@ def parse_json_response(text: str) -> Any:
                 return json.loads(m.group(0))
             except json.JSONDecodeError:
                 continue
+
+    # Salvage a truncated `answers` array (common with long step-by-step solutions)
+    salvage = re.search(r'"answers"\s*:\s*\[(.*)', text, re.DOTALL)
+    if salvage:
+        body = salvage.group(1)
+        # Split on top-level object boundaries and try parsing each
+        items = []
+        depth = 0
+        start = None
+        for i, ch in enumerate(body):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start is not None:
+                    chunk = body[start : i + 1]
+                    try:
+                        items.append(json.loads(chunk))
+                    except json.JSONDecodeError:
+                        pass
+                    start = None
+        if items:
+            return {"answers": items}
 
     raise ValueError(f"Could not parse JSON from: {text[:200]}")
