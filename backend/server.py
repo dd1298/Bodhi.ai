@@ -969,18 +969,144 @@ async def generate_solution(paper_id: str, user: dict = Depends(get_current_user
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    try:
-        solution = await _build_solution_for_paper(p, user["id"])
-    except HTTPException:
-        raise
-    except Exception as e:  # noqa: BLE001
-        logger.exception("Solution generation failed")
-        raise HTTPException(status_code=502, detail=f"Solution failed: {e}")
+    # Build empty-shell solution immediately so the user gets a response in <1s.
+    # Background task fills it in batch by batch and updates the paper doc.
+    total = 0
+    empty_sections = []
+    for s in p.get("sections", []):
+        ans_list = []
+        for q in s.get("questions", []):
+            if q.get("question"):
+                ans_list.append({"question_id": q["id"], "answer": ""})
+                total += 1
+        empty_sections.append(
+            {"title": s.get("title", "Section"), "answers": ans_list}
+        )
+    if total == 0:
+        raise HTTPException(status_code=400, detail="Paper has no questions to solve")
 
+    pending_solution = {
+        "generated_at": utcnow_iso(),
+        "is_stale": False,
+        "status": "generating",
+        "completed": 0,
+        "total": total,
+        "sections": empty_sections,
+    }
     await db.papers.update_one(
-        {"id": paper_id}, {"$set": {"solution": solution}}
+        {"id": paper_id}, {"$set": {"solution": pending_solution}}
     )
-    return solution
+
+    import asyncio as _asyncio
+
+    _asyncio.create_task(
+        _generate_solution_background(paper_id, user["id"])
+    )
+    return pending_solution
+
+
+async def _generate_solution_background(paper_id: str, user_id: str) -> None:
+    """Run batched solution generation, updating the paper doc as each batch
+    completes so the frontend can show progress."""
+    BATCH_SIZE = 5
+    try:
+        p = await db.papers.find_one(
+            {"id": paper_id, "is_deleted": False}, {"_id": 0}
+        )
+        if not p:
+            return
+
+        questions_payload: list = []
+        for s in p.get("sections", []):
+            for q in s.get("questions", []):
+                if not q.get("question"):
+                    continue
+                questions_payload.append({
+                    "id": q["id"],
+                    "question": q["question"],
+                    "type": q.get("type", "concept"),
+                    "marks": q.get("marks", 2),
+                })
+
+        tb = await db.textbooks.find_one(
+            {"id": p.get("textbook_id"), "is_deleted": False}, {"_id": 0}
+        )
+        chunks = (tb or {}).get("chunks") or []
+        context_excerpt = "\n\n".join(chunks[:5])[:8000]
+
+        feedback_hints = await _load_solution_feedback(
+            user_id, p.get("subject", ""), p.get("class_name", "")
+        )
+
+        answers: dict[str, str] = {}
+        n_batches = (len(questions_payload) + BATCH_SIZE - 1) // BATCH_SIZE
+        for bi in range(n_batches):
+            batch = questions_payload[bi * BATCH_SIZE : (bi + 1) * BATCH_SIZE]
+            prompt = solution_prompt(
+                subject=p.get("subject", ""),
+                klass=p.get("class_name", ""),
+                context_excerpt=context_excerpt,
+                questions_payload=batch,
+                feedback_hints=feedback_hints,
+            )
+            for attempt in range(2):
+                try:
+                    raw = await chat_complete(
+                        system_message=SOLUTION_SYSTEM, user_text=prompt
+                    )
+                    data = parse_json_response(raw)
+                    for a in data.get("answers") or []:
+                        qid = a.get("question_id")
+                        text = (a.get("answer") or "").strip()
+                        if qid and text:
+                            answers[qid] = text
+                    break
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        f"Solution batch {bi + 1}/{n_batches} attempt {attempt + 1} failed: {e}"
+                    )
+
+            # After each batch, persist progress so the UI can show it
+            current = await db.papers.find_one(
+                {"id": paper_id}, {"_id": 0, "solution": 1}
+            )
+            sol = (current or {}).get("solution") or {}
+            for sec in sol.get("sections", []):
+                for ans in sec.get("answers", []):
+                    qid = ans.get("question_id")
+                    if qid in answers:
+                        ans["answer"] = answers[qid]
+            sol["completed"] = sum(
+                1
+                for sec in sol.get("sections", [])
+                for ans in sec.get("answers", [])
+                if ans.get("answer")
+            )
+            sol["status"] = "generating"
+            await db.papers.update_one(
+                {"id": paper_id}, {"$set": {"solution": sol}}
+            )
+
+        # Mark complete (or partial)
+        current = await db.papers.find_one(
+            {"id": paper_id}, {"_id": 0, "solution": 1}
+        )
+        sol = (current or {}).get("solution") or {}
+        completed = sol.get("completed", 0)
+        sol["status"] = "ready" if completed == sol.get("total", 0) else "partial"
+        sol["finished_at"] = utcnow_iso()
+        await db.papers.update_one(
+            {"id": paper_id}, {"$set": {"solution": sol}}
+        )
+        logger.info(
+            f"Solution background job finished for {paper_id}: {completed}/{sol.get('total', 0)}"
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Solution background job crashed: {e}")
+        await db.papers.update_one(
+            {"id": paper_id},
+            {"$set": {"solution.status": "failed", "solution.error": str(e)[:300]}},
+        )
 
 
 @api_router.post("/papers/solutions/bulk-generate")

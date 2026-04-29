@@ -38,9 +38,20 @@ export default function SolutionView() {
     load();
   }, [id]); // eslint-disable-line
 
+  // Poll while solution is generating in the background.
+  useEffect(() => {
+    const sol = paper?.solution;
+    if (!sol) return;
+    if (sol.status === "generating") {
+      const t = setInterval(load, 4000);
+      return () => clearInterval(t);
+    }
+  }, [paper]); // eslint-disable-line
+
   const regenerate = async () => {
     if (
       paper?.solution &&
+      paper.solution.status !== "generating" &&
       !window.confirm("Regenerate solution? Your current edits will be overwritten.")
     ) {
       return;
@@ -48,7 +59,7 @@ export default function SolutionView() {
     setRegenerating(true);
     try {
       await api.post(`/papers/${id}/solution/generate`);
-      toast.success("Solution generated");
+      toast.success("Generation started — answers will fill in shortly");
       await load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Failed");
@@ -274,6 +285,73 @@ export default function SolutionView() {
                 <b>{paper.total_marks}</b>
               </div>
             </div>
+
+            {solution.status === "generating" && (
+              <div
+                className="mb-6 border-2 border-[#002FA7] bg-blue-50 p-4 flex items-start gap-3"
+                data-testid="generating-banner"
+              >
+                <CheckCircle
+                  size={24}
+                  weight="fill"
+                  color="#002FA7"
+                  className="shrink-0 animate-pulse"
+                />
+                <div className="flex-1">
+                  <div className="font-bold uppercase tracking-wider text-sm">
+                    Generating answers...
+                  </div>
+                  <div className="text-sm text-neutral-700 mt-1 font-mono">
+                    {solution.completed || 0} of {solution.total || 0} answered
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {solution.status === "partial" && (
+              <div
+                className="mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4 flex items-start gap-3"
+                data-testid="partial-banner"
+              >
+                <WarningCircle
+                  size={24}
+                  weight="fill"
+                  color="#FFC300"
+                  className="shrink-0"
+                />
+                <div className="flex-1">
+                  <div className="font-bold uppercase tracking-wider text-sm">
+                    Partial solution
+                  </div>
+                  <div className="text-sm text-neutral-700 mt-1 font-mono">
+                    {solution.completed} of {solution.total} answered. Click
+                    Regenerate to retry the missing ones.
+                  </div>
+                </div>
+                <button
+                  onClick={regenerate}
+                  disabled={regenerating}
+                  className="qp-btn qp-btn-primary text-xs"
+                  data-testid="partial-regenerate-button"
+                >
+                  Regenerate
+                </button>
+              </div>
+            )}
+
+            {solution.status === "failed" && (
+              <div
+                className="mb-6 border-2 border-[#E63946] bg-red-50 p-4"
+                data-testid="failed-banner"
+              >
+                <div className="font-bold uppercase tracking-wider text-sm">
+                  Generation failed
+                </div>
+                <div className="text-sm text-neutral-700 mt-1 font-mono">
+                  {solution.error || "Try again later."}
+                </div>
+              </div>
+            )}
 
             {solution.is_stale && (
               <div
