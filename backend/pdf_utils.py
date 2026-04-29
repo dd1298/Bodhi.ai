@@ -1,6 +1,15 @@
 """PDF utilities: text extraction, chunking, and paper rendering."""
 import io
+import os
+import re
+import tempfile
+import uuid
 from typing import List
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
 
 from pypdf import PdfReader
 from reportlab.lib import colors
@@ -15,6 +24,98 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+
+# Cache rendered math equations across a single PDF render so repeated
+# expressions don't get rasterised twice.
+_MATH_CACHE: dict = {}
+
+
+def _render_math_png(latex: str, fontsize: int = 11) -> str | None:
+    """Render a LaTeX expression to a transparent PNG using matplotlib mathtext.
+    Returns the file path, or None on failure."""
+    key = (latex, fontsize)
+    if key in _MATH_CACHE:
+        return _MATH_CACHE[key]
+    try:
+        fig = plt.figure(figsize=(0.01, 0.01))
+        fig.text(0, 0, f"${latex}$", fontsize=fontsize)
+        out = os.path.join(
+            tempfile.gettempdir(), f"qpgen_math_{uuid.uuid4().hex}.png"
+        )
+        fig.savefig(
+            out,
+            dpi=220,
+            bbox_inches="tight",
+            pad_inches=0.02,
+            transparent=True,
+        )
+        plt.close(fig)
+        _MATH_CACHE[key] = out
+        return out
+    except Exception:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+        return None
+
+
+def _math_to_paragraph_html(text: str) -> str:
+    """Convert a string with LaTeX delimiters ($...$ and $$...$$) into a
+    ReportLab Paragraph-compatible HTML string with inline math images."""
+    if not text:
+        return ""
+    # Escape ReportLab/Paragraph special characters first, BUT preserve $ markers
+    # by extracting math segments before escaping.
+    segments: list = []  # list of ("text"|"math", value)
+    i = 0
+    while i < len(text):
+        if text.startswith("$$", i):
+            end = text.find("$$", i + 2)
+            if end == -1:
+                segments.append(("text", text[i:]))
+                break
+            segments.append(("math", text[i + 2 : end]))
+            i = end + 2
+        elif text[i] == "$":
+            end = text.find("$", i + 1)
+            if end == -1:
+                segments.append(("text", text[i:]))
+                break
+            segments.append(("math", text[i + 1 : end]))
+            i = end + 1
+        else:
+            # accumulate plain text until next $
+            nxt = text.find("$", i)
+            if nxt == -1:
+                segments.append(("text", text[i:]))
+                break
+            segments.append(("text", text[i:nxt]))
+            i = nxt
+
+    out_parts: list = []
+    for kind, val in segments:
+        if kind == "text":
+            esc = (
+                val.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br/>")
+            )
+            out_parts.append(esc)
+        else:
+            png = _render_math_png(val.strip())
+            if png:
+                out_parts.append(
+                    f'<img src="{png}" valign="middle" height="14"/>'
+                )
+            else:
+                # fallback: keep the raw expression
+                out_parts.append(
+                    val.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                )
+    return "".join(out_parts)
 
 
 def extract_text(pdf_bytes: bytes) -> str:
@@ -165,9 +266,10 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
             difficulty = q.get("difficulty", "")
             qtype = q.get("type", "")
             important = "★ " if q.get("important") else ""
+            q_html = _math_to_paragraph_html(q.get("question", ""))
             story.append(
                 Paragraph(
-                    f"<b>Q{q_counter}.</b> {important}{q.get('question','')} "
+                    f"<b>Q{q_counter}.</b> {important}{q_html} "
                     f"<font color='#525252'>[{marks_q} marks]</font>",
                     q_style,
                 )
@@ -192,7 +294,15 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
             q_counter += 1
 
     doc.build(story)
-    return buf.getvalue()
+    out = buf.getvalue()
+    # Clean up temp math PNGs
+    for path in list(_MATH_CACHE.values()):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+    _MATH_CACHE.clear()
+    return out
 
 
 def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
@@ -310,11 +420,11 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
     for section in sections:
         story.append(Paragraph(section.get("title", "Section"), section_h))
         for q in section.get("questions", []):
-            qtext = q.get("question", "")
+            qtext_html = _math_to_paragraph_html(q.get("question", ""))
             marks_q = q.get("marks", 0)
             story.append(
                 Paragraph(
-                    f"Q{q_counter}. {qtext} "
+                    f"Q{q_counter}. {qtext_html} "
                     f"<font color='#525252'>[{marks_q} marks]</font>",
                     q_style,
                 )
@@ -335,17 +445,16 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
                     pass
 
             answer = answers_by_qid.get(q.get("id")) or "(No answer written yet.)"
-            # escape < > and preserve line breaks
-            safe = (
-                answer.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\n", "<br/>")
-            )
-            story.append(
-                Paragraph(f"<b>Ans:</b> {safe}", a_style)
-            )
+            ans_html = _math_to_paragraph_html(answer)
+            story.append(Paragraph(f"<b>Ans:</b> {ans_html}", a_style))
             q_counter += 1
 
     doc.build(story)
-    return buf.getvalue()
+    out = buf.getvalue()
+    for path in list(_MATH_CACHE.values()):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+    _MATH_CACHE.clear()
+    return out

@@ -13,6 +13,7 @@ import {
   WarningCircle,
   Image as ImageIcon,
 } from "@phosphor-icons/react";
+import MathText from "@/components/MathText";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -325,7 +326,9 @@ export default function SolutionView() {
                       >
                         <div className="flex items-start gap-2">
                           <span className="font-bold">Q{qNum}.</span>
-                          <span className="flex-1">{q.question}</span>
+                          <span className="flex-1">
+                            <MathText text={q.question} />
+                          </span>
                           <span className="font-mono font-bold text-sm shrink-0">
                             [{q.marks}]
                           </span>
@@ -363,7 +366,9 @@ export default function SolutionView() {
                               className="bg-neutral-50 border border-neutral-300 p-4 whitespace-pre-wrap text-sm leading-relaxed"
                               data-testid={`answer-${q.id}`}
                             >
-                              {answerByQid[q.id] || (
+                              {answerByQid[q.id] ? (
+                                <MathText text={answerByQid[q.id]} />
+                              ) : (
                                 <span className="text-neutral-400 italic">
                                   (no answer)
                                 </span>

@@ -4,7 +4,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from dotenv import load_dotenv
 
@@ -108,7 +108,8 @@ class PaperRequest(BaseModel):
     subject: str
     class_name: str
     textbook_id: str
-    topics: List[str]  # selected topic names
+    # topics: either a list of names (legacy) OR list of {name, weight}.
+    topics: List[Any]
     difficulty: str = "medium"  # easy / medium / hard
     duration_minutes: int = 60
     total_marks: int = 50
@@ -480,10 +481,26 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         user["id"], req.subject, req.class_name
     )
 
+    # Normalise topics to weighted form: [{"name": str, "weight": int}, ...]
+    topics_weighted: list = []
+    for t in req.topics or []:
+        if isinstance(t, str):
+            topics_weighted.append({"name": t.strip(), "weight": 5})
+        elif isinstance(t, dict) and t.get("name"):
+            topics_weighted.append(
+                {
+                    "name": str(t["name"]).strip(),
+                    "weight": max(1, int(t.get("weight", 5))),
+                }
+            )
+    topics_weighted = [t for t in topics_weighted if t["name"]]
+    if not topics_weighted:
+        raise HTTPException(status_code=400, detail="At least one topic required")
+
     prompt = qgen_prompt(
         subject=req.subject,
         klass=req.class_name,
-        topics=req.topics,
+        topics_weighted=topics_weighted,
         difficulty=req.difficulty,
         distribution=dist,
         total_marks=req.total_marks,
@@ -534,7 +551,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "subject": req.subject,
         "class_name": req.class_name,
         "textbook_id": req.textbook_id,
-        "topics": req.topics,
+        "topics": topics_weighted,
         "difficulty": req.difficulty,
         "duration_minutes": req.duration_minutes,
         "total_marks": req.total_marks,

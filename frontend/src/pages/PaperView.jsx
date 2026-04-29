@@ -17,6 +17,7 @@ import {
   Image as ImageIcon,
   CheckCircle,
 } from "@phosphor-icons/react";
+import MathText from "@/components/MathText";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -451,7 +452,9 @@ export default function PaperView() {
                               className="mt-1"
                             />
                           )}
-                          <span className="flex-1">{q.question}</span>
+                          <span className="flex-1">
+                            <MathText text={q.question} />
+                          </span>
                           <span className="font-mono font-bold text-sm shrink-0">
                             [{q.marks}]
                           </span>

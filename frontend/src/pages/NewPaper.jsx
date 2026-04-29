@@ -18,7 +18,7 @@ export default function NewPaper() {
   const [totalMarks, setTotalMarks] = useState(50);
   const [info, setInfo] = useState(40);
   const [concept, setConcept] = useState(40);
-  const [selectedTopics, setSelectedTopics] = useState([]);
+  const [selectedTopics, setSelectedTopics] = useState([]); // [{name, weight}]
   const [generating, setGenerating] = useState(false);
   const [extracting, setExtracting] = useState(false);
 
@@ -45,7 +45,17 @@ export default function NewPaper() {
 
   const toggleTopic = (name) => {
     setSelectedTopics((curr) =>
-      curr.includes(name) ? curr.filter((t) => t !== name) : [...curr, name]
+      curr.find((t) => t.name === name)
+        ? curr.filter((t) => t.name !== name)
+        : [...curr, { name, weight: 5 }]
+    );
+  };
+
+  const setTopicWeight = (name, weight) => {
+    setSelectedTopics((curr) =>
+      curr.map((t) =>
+        t.name === name ? { ...t, weight: Math.max(1, Math.min(10, weight)) } : t
+      )
     );
   };
 
@@ -81,7 +91,7 @@ export default function NewPaper() {
         subject: tbDetail?.subject || "",
         class_name: tbDetail?.class_name || "",
         textbook_id: selectedTbId,
-        topics: selectedTopics,
+        topics: selectedTopics, // [{name, weight}]
         difficulty,
         duration_minutes: Number(duration),
         total_marks: Number(totalMarks),
@@ -239,7 +249,7 @@ export default function NewPaper() {
           <div className="lg:col-span-2 space-y-6">
             <div className="qp-card">
               <div className="flex items-center justify-between mb-4">
-                <div className="overline">// TOPICS</div>
+                <div className="overline">// TOPICS &amp; WEIGHTS</div>
                 {tbDetail && (
                   <button
                     type="button"
@@ -252,6 +262,13 @@ export default function NewPaper() {
                   </button>
                 )}
               </div>
+
+              {hasTopics && (
+                <p className="text-xs text-neutral-500 font-mono mb-3">
+                  Pick topics or subtopics. Heavier weights → more questions
+                  from that item.
+                </p>
+              )}
 
               {!tbDetail && (
                 <div className="text-sm text-neutral-500">
@@ -276,44 +293,79 @@ export default function NewPaper() {
               )}
 
               {hasTopics && (
-                <div className="space-y-2 max-h-[400px] overflow-auto pr-1">
+                <div className="space-y-2 max-h-[460px] overflow-auto pr-1">
                   {tbDetail.topics.map((t, i) => {
-                    const checked = selectedTopics.includes(t.name);
+                    const items = [
+                      { name: t.name, isTopic: true },
+                      ...((t.subtopics || []).map((s) => ({ name: s, isTopic: false }))),
+                    ];
                     return (
-                      <button
-                        type="button"
+                      <div
                         key={i}
-                        onClick={() => toggleTopic(t.name)}
-                        data-testid={`topic-select-${i}`}
-                        className={`w-full text-left border-2 p-3 flex items-start gap-3 transition-colors ${
-                          checked
-                            ? "border-[#002FA7] bg-[#002FA7]/5"
-                            : "border-black bg-white hover:bg-neutral-50"
-                        }`}
+                        className="border-2 border-black bg-white"
+                        data-testid={`topic-block-${i}`}
                       >
-                        {checked ? (
-                          <CheckSquare
-                            size={18}
-                            weight="fill"
-                            color="#002FA7"
-                            className="shrink-0 mt-0.5"
-                          />
-                        ) : (
-                          <Square
-                            size={18}
-                            weight="bold"
-                            className="shrink-0 mt-0.5"
-                          />
-                        )}
-                        <div className="min-w-0">
-                          <div className="font-bold">{t.name}</div>
-                          {t.subtopics?.length > 0 && (
-                            <div className="text-xs text-neutral-500 font-mono mt-0.5 truncate">
-                              {t.subtopics.join(" · ")}
+                        {items.map((it, j) => {
+                          const sel = selectedTopics.find((s) => s.name === it.name);
+                          const checked = !!sel;
+                          return (
+                            <div
+                              key={j}
+                              className={`flex items-center gap-2 p-2 ${
+                                j !== items.length - 1
+                                  ? "border-b border-neutral-200"
+                                  : ""
+                              } ${it.isTopic ? "bg-neutral-50" : "pl-8"}`}
+                              data-testid={`topic-row-${i}-${j}`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => toggleTopic(it.name)}
+                                className="flex items-center gap-2 flex-1 text-left"
+                                data-testid={`topic-toggle-${i}-${j}`}
+                              >
+                                {checked ? (
+                                  <CheckSquare
+                                    size={18}
+                                    weight="fill"
+                                    color="#002FA7"
+                                  />
+                                ) : (
+                                  <Square size={18} weight="bold" />
+                                )}
+                                <span
+                                  className={`text-sm ${
+                                    it.isTopic ? "font-bold" : ""
+                                  }`}
+                                >
+                                  {it.name}
+                                </span>
+                              </button>
+                              {checked && (
+                                <div
+                                  className="flex items-center gap-2 shrink-0"
+                                  data-testid={`weight-row-${i}-${j}`}
+                                >
+                                  <input
+                                    type="range"
+                                    min={1}
+                                    max={10}
+                                    value={sel.weight}
+                                    onChange={(e) =>
+                                      setTopicWeight(it.name, Number(e.target.value))
+                                    }
+                                    className="w-24"
+                                    data-testid={`weight-slider-${i}-${j}`}
+                                  />
+                                  <span className="font-mono text-xs w-6 text-right font-bold">
+                                    {sel.weight}
+                                  </span>
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      </button>
+                          );
+                        })}
+                      </div>
                     );
                   })}
                 </div>

@@ -42,7 +42,7 @@ QUESTION_TYPE_GUIDE = {
 def qgen_prompt(
     subject: str,
     klass: str,
-    topics: list[str],
+    topics_weighted: list,  # list of {"name": str, "weight": int}
     difficulty: str,
     distribution: dict,
     total_marks: int,
@@ -65,16 +65,40 @@ def qgen_prompt(
             f"{feedback_hints}\n=== END ===\n\n"
         )
 
+    # Compute proportional question counts per topic so the LLM has a hard target.
+    total_w = sum(max(1, int(t.get("weight", 5))) for t in topics_weighted) or 1
+    topic_lines = []
+    for t in topics_weighted:
+        w = max(1, int(t.get("weight", 5)))
+        share = round(target_q * w / total_w)
+        topic_lines.append(
+            f"- {t['name']}  (weight {w}, target ~{share} question{'s' if share != 1 else ''})"
+        )
+    topics_block = "\n".join(topic_lines)
+
     return (
         f"Generate an ORIGINAL question paper for Class {klass} - {subject}.\n"
-        f"Topics to cover: {', '.join(topics)}\n"
+        f"Topics to cover (with weightage — heavier topics get more questions):\n"
+        f"{topics_block}\n\n"
         f"Overall difficulty: {difficulty}\n"
         f"Total marks: {total_marks}, Duration: {duration} minutes.\n"
         f"Target question counts: information={info_n}, concept={concept_n}, application={app_n}.\n\n"
         f"Question type definitions:\n{guide}\n\n"
         "Marks allocation: assign 1-2 marks for information, 3-4 for concept, 5-6 for application, "
         "ensuring the sum equals the total marks as closely as possible.\n\n"
+        "TOPIC COVERAGE RULE (mandatory):\n"
+        "- Distribute questions across ALL listed topics in proportion to their weights.\n"
+        "- No single topic should exceed its target by more than 1 question.\n"
+        "- If a topic has weight > 0 it MUST receive at least one question.\n\n"
         f"{feedback_block}"
+        "MATH FORMATTING:\n"
+        "When the question contains mathematical expressions (integrals, derivatives, vectors, "
+        "matrices, fractions, summations, Greek letters, square roots, etc.), wrap them in LaTeX "
+        "delimiters: '$...$' for inline math and '$$...$$' for block math. Examples:\n"
+        "  - 'Evaluate $\\int_0^\\pi \\sin x\\, dx$.'\n"
+        "  - 'Show that $\\vec{a}\\cdot\\vec{b}=|\\vec{a}||\\vec{b}|\\cos\\theta$.'\n"
+        "  - 'Solve $$\\frac{d^2y}{dx^2}+y=0$$'\n"
+        "Use only standard LaTeX commands compatible with KaTeX. For non-math subjects, ignore this.\n\n"
         "DIAGRAM SUPPORT:\n"
         "Some questions benefit from a figure (Physics circuits, Biology labeled diagrams, "
         "Geography maps, Geometry shapes, Chemistry structures, Economics graphs, History timelines). "
@@ -86,8 +110,8 @@ def qgen_prompt(
         '  "sections": [\n'
         '    { "title": "Section A - Information Based",\n'
         '      "questions": [\n'
-        '        { "question": "...", "type": "information", "difficulty": "easy|medium|hard", "marks": 1,\n'
-        '          "needs_diagram": false }\n'
+        '        { "question": "...", "topic": "Topic name", "type": "information",\n'
+        '          "difficulty": "easy|medium|hard", "marks": 1, "needs_diagram": false }\n'
         '      ]\n'
         '    }, ...\n'
         "  ]\n"
@@ -96,6 +120,7 @@ def qgen_prompt(
         "- Do NOT copy any sentence from the textbook content.\n"
         "- Every question must be originally phrased.\n"
         "- Stay strictly within the listed topics.\n"
+        "- Set 'topic' field on every question to the matching topic name from the list above.\n"
         "- Ensure sum of marks of all questions equals the total marks.\n"
         "- At most 5 questions in the entire paper should have needs_diagram=true.\n"
         "- No prose outside the JSON.\n\n"
@@ -166,7 +191,11 @@ def solution_prompt(
         "- For step-by-step answers, use plain text with numbered steps (1., 2., 3.).\n"
         "- Use 'Final Answer:' prefix before the concluding value for application questions.\n"
         "- No markdown headings or bold, but you may use bullet points ('- ') inside steps.\n"
-        "- Each answer must directly address the specific question.\n\n"
+        "- Each answer must directly address the specific question.\n"
+        "- Wrap any mathematical expression (integral, vector, fraction, derivative, sum, "
+        "Greek letter, matrix, square root) in LaTeX delimiters: '$...$' inline or '$$...$$' "
+        "for display. Use only KaTeX-compatible commands. Examples: '$\\vec{F}=m\\vec{a}$', "
+        "'$\\int_0^1 x^2\\, dx = \\tfrac{1}{3}$'.\n\n"
         f"{feedback_block}"
         "Return ONLY strict JSON of the form:\n"
         "{\n"
