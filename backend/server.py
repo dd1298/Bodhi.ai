@@ -107,7 +107,9 @@ class PaperRequest(BaseModel):
     title: str
     subject: str
     class_name: str
-    textbook_id: str
+    # Either textbook_id (legacy, single) OR textbook_ids (new, multiple).
+    textbook_id: Optional[str] = None
+    textbook_ids: Optional[List[str]] = None
     # topics: either a list of names (legacy) OR list of {name, weight}.
     topics: List[Any]
     difficulty: str = "medium"  # easy / medium / hard
@@ -505,16 +507,33 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
             status_code=400, detail="Distribution must sum to 100%"
         )
 
-    tb = await db.textbooks.find_one(
-        {"id": req.textbook_id, "is_deleted": False}, {"_id": 0}
-    )
-    if not tb:
-        raise HTTPException(status_code=404, detail="Textbook not found")
-    if tb["owner_id"] != user["id"] and user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    # Resolve textbook list (support both legacy single + new multi)
+    tb_ids: list = []
+    if req.textbook_ids:
+        tb_ids.extend(req.textbook_ids)
+    if req.textbook_id and req.textbook_id not in tb_ids:
+        tb_ids.append(req.textbook_id)
+    tb_ids = [x for x in tb_ids if x]
+    if not tb_ids:
+        raise HTTPException(status_code=400, detail="At least one textbook required")
 
-    chunks = tb.get("chunks") or []
-    context_excerpt = "\n\n".join(chunks[:6])[:10000]
+    textbooks: list = []
+    for tid in tb_ids:
+        tb = await db.textbooks.find_one(
+            {"id": tid, "is_deleted": False}, {"_id": 0}
+        )
+        if not tb:
+            raise HTTPException(status_code=404, detail=f"Textbook {tid} not found")
+        if tb["owner_id"] != user["id"] and user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Forbidden")
+        textbooks.append(tb)
+
+    # Interleave chunks from each textbook so context spans the full book list
+    merged_chunks: list = []
+    max_per = max(2, 8 // max(1, len(textbooks)))
+    for tb in textbooks:
+        merged_chunks.extend((tb.get("chunks") or [])[:max_per])
+    context_excerpt = "\n\n".join(merged_chunks)[:10000]
 
     feedback_hints = await _load_feedback_hints(
         user["id"], req.subject, req.class_name
@@ -589,7 +608,8 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "title": req.title,
         "subject": req.subject,
         "class_name": req.class_name,
-        "textbook_id": req.textbook_id,
+        "textbook_id": tb_ids[0],  # legacy single for back-compat
+        "textbook_ids": tb_ids,
         "topics": topics_weighted,
         "difficulty": req.difficulty,
         "duration_minutes": req.duration_minutes,
@@ -932,11 +952,18 @@ async def _build_solution_for_paper(paper: dict, user_id: str) -> dict:
     if not questions_payload:
         raise HTTPException(status_code=400, detail="Paper has no questions to solve")
 
-    tb = await db.textbooks.find_one(
-        {"id": paper.get("textbook_id"), "is_deleted": False}, {"_id": 0}
+    tb_ids = paper.get("textbook_ids") or (
+        [paper["textbook_id"]] if paper.get("textbook_id") else []
     )
-    chunks = (tb or {}).get("chunks") or []
-    context_excerpt = "\n\n".join(chunks[:5])[:8000]
+    merged_chunks: list = []
+    max_per = max(2, 5 // max(1, len(tb_ids)))
+    for tid in tb_ids:
+        tb = await db.textbooks.find_one(
+            {"id": tid, "is_deleted": False}, {"_id": 0}
+        )
+        if tb:
+            merged_chunks.extend((tb.get("chunks") or [])[:max_per])
+    context_excerpt = "\n\n".join(merged_chunks)[:8000]
 
     feedback_hints = await _load_solution_feedback(
         user_id, paper.get("subject", ""), paper.get("class_name", "")
@@ -1067,11 +1094,18 @@ async def _generate_solution_background(paper_id: str, user_id: str) -> None:
                     "marks": q.get("marks", 2),
                 })
 
-        tb = await db.textbooks.find_one(
-            {"id": p.get("textbook_id"), "is_deleted": False}, {"_id": 0}
+        tb_ids = p.get("textbook_ids") or (
+            [p["textbook_id"]] if p.get("textbook_id") else []
         )
-        chunks = (tb or {}).get("chunks") or []
-        context_excerpt = "\n\n".join(chunks[:5])[:8000]
+        merged_chunks: list = []
+        max_per = max(2, 5 // max(1, len(tb_ids)))
+        for tid in tb_ids:
+            tb = await db.textbooks.find_one(
+                {"id": tid, "is_deleted": False}, {"_id": 0}
+            )
+            if tb:
+                merged_chunks.extend((tb.get("chunks") or [])[:max_per])
+        context_excerpt = "\n\n".join(merged_chunks)[:8000]
 
         feedback_hints = await _load_solution_feedback(
             user_id, p.get("subject", ""), p.get("class_name", "")

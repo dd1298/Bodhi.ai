@@ -3,15 +3,22 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { toast } from "sonner";
-import { Sparkle, ArrowRight, CheckSquare, Square } from "@phosphor-icons/react";
+import {
+  Sparkle,
+  ArrowRight,
+  CheckSquare,
+  Square,
+  X as XIcon,
+  Plus,
+} from "@phosphor-icons/react";
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
 
 export default function NewPaper() {
   const navigate = useNavigate();
   const [textbooks, setTextbooks] = useState([]);
-  const [selectedTbId, setSelectedTbId] = useState("");
-  const [tbDetail, setTbDetail] = useState(null);
+  const [selectedTbIds, setSelectedTbIds] = useState([]); // list of ids
+  const [tbDetails, setTbDetails] = useState({}); // { id: { topics, subject, class_name } }
   const [title, setTitle] = useState("");
   const [difficulty, setDifficulty] = useState("medium");
   const [duration, setDuration] = useState(60);
@@ -20,7 +27,7 @@ export default function NewPaper() {
   const [concept, setConcept] = useState(40);
   const [selectedTopics, setSelectedTopics] = useState([]); // [{name, weight}]
   const [generating, setGenerating] = useState(false);
-  const [extracting, setExtracting] = useState(false);
+  const [extractingId, setExtractingId] = useState(null);
 
   const application = useMemo(
     () => Math.max(0, 100 - info - concept),
@@ -31,17 +38,42 @@ export default function NewPaper() {
     api.get("/textbooks").then((r) => setTextbooks(r.data));
   }, []);
 
+  // Load detail (topics) for every selected textbook not yet in cache.
   useEffect(() => {
-    if (!selectedTbId) {
-      setTbDetail(null);
-      setSelectedTopics([]);
-      return;
-    }
-    api.get(`/textbooks/${selectedTbId}`).then((r) => {
-      setTbDetail(r.data);
-      setSelectedTopics([]);
+    const missing = selectedTbIds.filter((id) => !tbDetails[id]);
+    if (missing.length === 0) return;
+    Promise.all(
+      missing.map((id) => api.get(`/textbooks/${id}`).then((r) => [id, r.data]))
+    ).then((pairs) => {
+      setTbDetails((curr) => {
+        const next = { ...curr };
+        for (const [id, detail] of pairs) next[id] = detail;
+        return next;
+      });
     });
-  }, [selectedTbId]);
+  }, [selectedTbIds]); // eslint-disable-line
+
+  const addTextbook = (id) => {
+    if (!id) return;
+    if (selectedTbIds.includes(id)) return;
+    setSelectedTbIds((curr) => [...curr, id]);
+  };
+
+  const removeTextbook = (id) => {
+    setSelectedTbIds((curr) => curr.filter((x) => x !== id));
+    // Prune topics tied only to this book
+    const others = selectedTbIds.filter((x) => x !== id);
+    const allowed = new Set();
+    for (const other of others) {
+      const d = tbDetails[other];
+      if (!d) continue;
+      (d.topics || []).forEach((t) => {
+        allowed.add(t.name);
+        (t.subtopics || []).forEach((s) => allowed.add(s));
+      });
+    }
+    setSelectedTopics((curr) => curr.filter((t) => allowed.has(t.name)));
+  };
 
   const toggleTopic = (name) => {
     setSelectedTopics((curr) =>
@@ -59,39 +91,42 @@ export default function NewPaper() {
     );
   };
 
-  const extractIfNeeded = async () => {
-    if (!selectedTbId) return;
-    setExtracting(true);
+  const extractTopicsFor = async (id) => {
+    setExtractingId(id);
     try {
-      const { data } = await api.post(
-        `/textbooks/${selectedTbId}/extract-topics`
-      );
-      setTbDetail({ ...tbDetail, topics: data.topics });
+      const { data } = await api.post(`/textbooks/${id}/extract-topics`);
+      setTbDetails((curr) => ({
+        ...curr,
+        [id]: { ...(curr[id] || {}), topics: data.topics },
+      }));
       toast.success("Topics extracted");
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Failed");
     } finally {
-      setExtracting(false);
+      setExtractingId(null);
     }
   };
 
   const onGenerate = async (e) => {
     e.preventDefault();
-    if (!selectedTbId) return toast.error("Select a textbook");
+    if (selectedTbIds.length === 0)
+      return toast.error("Select at least one textbook");
     if (!title) return toast.error("Title required");
     if (selectedTopics.length === 0)
       return toast.error("Select at least one topic");
     if (info + concept + application !== 100)
       return toast.error("Distribution must sum to 100%");
 
+    // Derive subject / class from the first selected book
+    const first = tbDetails[selectedTbIds[0]] || {};
     setGenerating(true);
     try {
       const { data } = await api.post("/papers/generate", {
         title,
-        subject: tbDetail?.subject || "",
-        class_name: tbDetail?.class_name || "",
-        textbook_id: selectedTbId,
-        topics: selectedTopics, // [{name, weight}]
+        subject: first.subject || "",
+        class_name: first.class_name || "",
+        textbook_ids: selectedTbIds,
+        topics: selectedTopics,
         difficulty,
         duration_minutes: Number(duration),
         total_marks: Number(totalMarks),
@@ -106,7 +141,9 @@ export default function NewPaper() {
     }
   };
 
-  const hasTopics = (tbDetail?.topics || []).length > 0;
+  const anyTopics = selectedTbIds.some(
+    (id) => (tbDetails[id]?.topics || []).length > 0
+  );
 
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
@@ -137,21 +174,63 @@ export default function NewPaper() {
               </div>
 
               <div className="mb-4">
-                <label className="qp-label">Textbook</label>
+                <label className="qp-label">Textbooks</label>
                 <select
-                  value={selectedTbId}
-                  onChange={(e) => setSelectedTbId(e.target.value)}
+                  value=""
+                  onChange={(e) => {
+                    addTextbook(e.target.value);
+                    e.target.value = "";
+                  }}
                   className="qp-input"
-                  required
                   data-testid="paper-textbook-select"
                 >
-                  <option value="">Select textbook</option>
-                  {textbooks.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.original_filename} — {t.subject} / Class {t.class_name}
-                    </option>
-                  ))}
+                  <option value="">
+                    {selectedTbIds.length > 0
+                      ? "+ Add another textbook"
+                      : "Select textbook"}
+                  </option>
+                  {textbooks
+                    .filter((t) => !selectedTbIds.includes(t.id))
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.original_filename} — {t.subject} / Class{" "}
+                        {t.class_name}
+                      </option>
+                    ))}
                 </select>
+                {selectedTbIds.length > 0 && (
+                  <div
+                    className="mt-3 flex flex-wrap gap-2"
+                    data-testid="selected-textbooks-chips"
+                  >
+                    {selectedTbIds.map((id) => {
+                      const tb = textbooks.find((t) => t.id === id);
+                      const label = tb
+                        ? `${tb.original_filename.slice(0, 28)}${
+                            tb.original_filename.length > 28 ? "…" : ""
+                          }`
+                        : id.slice(0, 8);
+                      return (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-xs font-mono"
+                          data-testid={`textbook-chip-${id}`}
+                        >
+                          {label}
+                          <button
+                            type="button"
+                            onClick={() => removeTextbook(id)}
+                            aria-label="Remove"
+                            className="hover:text-[#E63946]"
+                            data-testid={`textbook-chip-remove-${id}`}
+                          >
+                            <XIcon size={12} weight="bold" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -248,128 +327,156 @@ export default function NewPaper() {
           {/* Right: Topics + submit */}
           <div className="lg:col-span-2 space-y-6">
             <div className="qp-card">
-              <div className="flex items-center justify-between mb-4">
-                <div className="overline">// TOPICS &amp; WEIGHTS</div>
-                {tbDetail && (
-                  <button
-                    type="button"
-                    onClick={extractIfNeeded}
-                    disabled={extracting}
-                    className="qp-btn-ghost text-xs uppercase tracking-wider"
-                    data-testid="extract-topics-button"
-                  >
-                    {extracting ? "..." : hasTopics ? "Re-extract" : "Extract"}
-                  </button>
-                )}
-              </div>
+              <div className="overline mb-4">// TOPICS &amp; WEIGHTS</div>
 
-              {hasTopics && (
+              {selectedTbIds.length === 0 && (
+                <div className="text-sm text-neutral-500">
+                  Select one or more textbooks to load topics.
+                </div>
+              )}
+
+              {selectedTbIds.length > 0 && anyTopics && (
                 <p className="text-xs text-neutral-500 font-mono mb-3">
-                  Pick topics or subtopics. Heavier weights → more questions
-                  from that item.
+                  Pick topics or subtopics from any book. Heavier weights →
+                  more questions from that item.
                 </p>
               )}
 
-              {!tbDetail && (
-                <div className="text-sm text-neutral-500">
-                  Select a textbook to load topics.
-                </div>
-              )}
-
-              {tbDetail && !hasTopics && (
-                <div className="text-sm text-neutral-600">
-                  No topics extracted yet.
-                  <button
-                    type="button"
-                    onClick={extractIfNeeded}
-                    disabled={extracting}
-                    className="qp-btn qp-btn-primary w-full mt-3"
-                    data-testid="extract-now-button"
-                  >
-                    <Sparkle size={14} weight="bold" />
-                    {extracting ? "Extracting..." : "Extract topics now"}
-                  </button>
-                </div>
-              )}
-
-              {hasTopics && (
-                <div className="space-y-2 max-h-[460px] overflow-auto pr-1">
-                  {tbDetail.topics.map((t, i) => {
-                    const items = [
-                      { name: t.name, isTopic: true },
-                      ...((t.subtopics || []).map((s) => ({ name: s, isTopic: false }))),
-                    ];
-                    return (
-                      <div
-                        key={i}
-                        className="border-2 border-black bg-white"
-                        data-testid={`topic-block-${i}`}
-                      >
-                        {items.map((it, j) => {
-                          const sel = selectedTopics.find((s) => s.name === it.name);
-                          const checked = !!sel;
-                          return (
-                            <div
-                              key={j}
-                              className={`flex items-center gap-2 p-2 ${
-                                j !== items.length - 1
-                                  ? "border-b border-neutral-200"
-                                  : ""
-                              } ${it.isTopic ? "bg-neutral-50" : "pl-8"}`}
-                              data-testid={`topic-row-${i}-${j}`}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => toggleTopic(it.name)}
-                                className="flex items-center gap-2 flex-1 text-left"
-                                data-testid={`topic-toggle-${i}-${j}`}
-                              >
-                                {checked ? (
-                                  <CheckSquare
-                                    size={18}
-                                    weight="fill"
-                                    color="#002FA7"
-                                  />
-                                ) : (
-                                  <Square size={18} weight="bold" />
-                                )}
-                                <span
-                                  className={`text-sm ${
-                                    it.isTopic ? "font-bold" : ""
-                                  }`}
-                                >
-                                  {it.name}
-                                </span>
-                              </button>
-                              {checked && (
-                                <div
-                                  className="flex items-center gap-2 shrink-0"
-                                  data-testid={`weight-row-${i}-${j}`}
-                                >
-                                  <input
-                                    type="range"
-                                    min={1}
-                                    max={10}
-                                    value={sel.weight}
-                                    onChange={(e) =>
-                                      setTopicWeight(it.name, Number(e.target.value))
-                                    }
-                                    className="w-24"
-                                    data-testid={`weight-slider-${i}-${j}`}
-                                  />
-                                  <span className="font-mono text-xs w-6 text-right font-bold">
-                                    {sel.weight}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
+              <div className="space-y-5 max-h-[520px] overflow-auto pr-1">
+                {selectedTbIds.map((bookId) => {
+                  const detail = tbDetails[bookId];
+                  const tb = textbooks.find((t) => t.id === bookId);
+                  const topics = detail?.topics || [];
+                  return (
+                    <div key={bookId} data-testid={`book-topics-${bookId}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="overline text-neutral-500 truncate">
+                          {(tb?.original_filename || bookId).slice(0, 40)}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => extractTopicsFor(bookId)}
+                          disabled={extractingId === bookId}
+                          className="qp-btn-ghost text-xs uppercase tracking-wider"
+                          data-testid={`extract-topics-${bookId}`}
+                        >
+                          {extractingId === bookId
+                            ? "..."
+                            : topics.length
+                            ? "Re-extract"
+                            : "Extract"}
+                        </button>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+
+                      {!detail && (
+                        <div className="text-xs text-neutral-400">Loading...</div>
+                      )}
+
+                      {detail && topics.length === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => extractTopicsFor(bookId)}
+                          disabled={extractingId === bookId}
+                          className="qp-btn qp-btn-primary w-full text-xs"
+                          data-testid={`extract-now-${bookId}`}
+                        >
+                          <Sparkle size={12} weight="bold" />
+                          {extractingId === bookId
+                            ? "Extracting..."
+                            : "Extract topics"}
+                        </button>
+                      )}
+
+                      {topics.length > 0 && (
+                        <div className="space-y-2">
+                          {topics.map((t, i) => {
+                            const items = [
+                              { name: t.name, isTopic: true },
+                              ...((t.subtopics || []).map((s) => ({
+                                name: s,
+                                isTopic: false,
+                              }))),
+                            ];
+                            return (
+                              <div
+                                key={i}
+                                className="border-2 border-black bg-white"
+                                data-testid={`topic-block-${bookId}-${i}`}
+                              >
+                                {items.map((it, j) => {
+                                  const sel = selectedTopics.find(
+                                    (s) => s.name === it.name
+                                  );
+                                  const checked = !!sel;
+                                  return (
+                                    <div
+                                      key={j}
+                                      className={`flex items-center gap-2 p-2 ${
+                                        j !== items.length - 1
+                                          ? "border-b border-neutral-200"
+                                          : ""
+                                      } ${it.isTopic ? "bg-neutral-50" : "pl-8"}`}
+                                      data-testid={`topic-row-${bookId}-${i}-${j}`}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleTopic(it.name)}
+                                        className="flex items-center gap-2 flex-1 text-left"
+                                        data-testid={`topic-toggle-${bookId}-${i}-${j}`}
+                                      >
+                                        {checked ? (
+                                          <CheckSquare
+                                            size={18}
+                                            weight="fill"
+                                            color="#002FA7"
+                                          />
+                                        ) : (
+                                          <Square size={18} weight="bold" />
+                                        )}
+                                        <span
+                                          className={`text-sm ${
+                                            it.isTopic ? "font-bold" : ""
+                                          }`}
+                                        >
+                                          {it.name}
+                                        </span>
+                                      </button>
+                                      {checked && (
+                                        <div
+                                          className="flex items-center gap-2 shrink-0"
+                                          data-testid={`weight-row-${bookId}-${i}-${j}`}
+                                        >
+                                          <input
+                                            type="range"
+                                            min={1}
+                                            max={10}
+                                            value={sel.weight}
+                                            onChange={(e) =>
+                                              setTopicWeight(
+                                                it.name,
+                                                Number(e.target.value)
+                                              )
+                                            }
+                                            className="w-20"
+                                            data-testid={`weight-slider-${bookId}-${i}-${j}`}
+                                          />
+                                          <span className="font-mono text-xs w-6 text-right font-bold">
+                                            {sel.weight}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <button
