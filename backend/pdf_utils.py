@@ -118,7 +118,82 @@ def _math_to_paragraph_html(text: str) -> str:
     return "".join(out_parts)
 
 
-def extract_text(pdf_bytes: bytes) -> str:
+def _strip_boilerplate(text: str) -> str:
+    """Remove common PDF watermark / header noise without touching real content.
+    Specifically targets:
+      - 'Downloaded from …' watermarks
+      - Standalone URL-only lines
+      - Bare page numbers on their own line
+      - 3+ consecutive blank lines
+    We intentionally do NOT do generic repetition-based stripping because
+    legitimate textbook phrases (chapter titles, section headers, common
+    question stems like 'Give the name of …') repeat often enough to trigger
+    false positives."""
+    if not text:
+        return text
+
+    import re as _re
+
+    url_re = _re.compile(
+        r"^(https?://|www\.)\S+$|^\S+\.(com|in|org|net|edu|co\.[a-z]+)(/\S*)?$",
+        _re.IGNORECASE,
+    )
+    lines = text.split("\n")
+    cleaned: list[str] = []
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            cleaned.append("")
+            continue
+        low = s.lower()
+        # Watermark patterns
+        if "downloaded from" in low:
+            continue
+        if url_re.match(s):
+            continue
+        # Bare page numbers
+        if s.isdigit() and len(s) <= 4:
+            continue
+        cleaned.append(ln)
+
+    # Collapse 3+ consecutive blank lines to at most 2
+    out: list[str] = []
+    blank = 0
+    for ln in cleaned:
+        if ln.strip():
+            out.append(ln)
+            blank = 0
+        else:
+            blank += 1
+            if blank <= 2:
+                out.append(ln)
+    return "\n".join(out)
+
+
+def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 30, dpi: int = 200) -> str:
+    """Run Tesseract OCR on a scanned / image-based PDF. Processes up to
+    max_pages pages to keep latency bounded — enough for topic extraction."""
+    try:
+        from pdf2image import convert_from_bytes
+        import pytesseract
+    except ImportError:
+        return ""
+    try:
+        images = convert_from_bytes(
+            pdf_bytes, dpi=dpi, first_page=1, last_page=max_pages
+        )
+    except Exception:
+        return ""
+    pieces: list = []
+    for img in images:
+        try:
+            pieces.append(pytesseract.image_to_string(img) or "")
+        except Exception:
+            continue
+    return "\n\n".join(p for p in pieces if p.strip())
+
+
+def extract_text(pdf_bytes: bytes, allow_ocr: bool = True) -> str:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     pieces: List[str] = []
     for page in reader.pages:
@@ -128,7 +203,17 @@ def extract_text(pdf_bytes: bytes) -> str:
             t = ""
         if t.strip():
             pieces.append(t)
-    return "\n\n".join(pieces)
+    raw = "\n\n".join(pieces)
+    cleaned = _strip_boilerplate(raw)
+
+    # If the text layer yielded almost nothing (scanned / image-based PDF),
+    # fall back to OCR for the first N pages. This is enough for topic
+    # extraction which only uses the first few chunks anyway.
+    if allow_ocr and len(cleaned.strip()) < 500:
+        ocr_text = _ocr_pdf(pdf_bytes)
+        if ocr_text.strip():
+            return _strip_boilerplate(ocr_text)
+    return cleaned
 
 
 def chunk_text(text: str, chunk_size: int = 2500, overlap: int = 200) -> List[str]:

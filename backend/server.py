@@ -315,6 +315,45 @@ async def list_textbooks(user: dict = Depends(get_current_user)):
     ]
 
 
+@api_router.post("/textbooks/{textbook_id}/reindex")
+async def reindex_textbook(textbook_id: str, user: dict = Depends(get_current_user)):
+    """Re-parse the textbook's PDF from storage with the latest text cleaner.
+    Useful when a textbook was indexed with heavy watermark noise and the
+    boilerplate stripper has since been improved."""
+    tb = await db.textbooks.find_one(
+        {"id": textbook_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not tb:
+        raise HTTPException(status_code=404, detail="Textbook not found")
+    if tb["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        data, _ct = get_object(tb["storage_path"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not fetch PDF: {e}")
+    try:
+        text = extract_text(data)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Re-extraction failed: {e}")
+    chunks = chunk_text(text)
+    await db.textbooks.update_one(
+        {"id": textbook_id},
+        {
+            "$set": {
+                "chunks": chunks[:50],
+                "chunk_count": len(chunks),
+                "status": "indexed" if chunks else "extraction_failed",
+                "topics": [],  # force re-extraction
+            }
+        },
+    )
+    return {
+        "id": textbook_id,
+        "chunk_count": len(chunks),
+        "status": "indexed" if chunks else "extraction_failed",
+    }
+
+
 @api_router.post("/textbooks/{textbook_id}/extract-topics")
 async def extract_topics(textbook_id: str, user: dict = Depends(get_current_user)):
     tb = await db.textbooks.find_one({"id": textbook_id, "is_deleted": False}, {"_id": 0})

@@ -74,6 +74,7 @@ packaging==26.0
 pandas==3.0.2
 passlib==1.7.4
 pathspec==1.0.4
+pdf2image==1.17.0
 pillow==12.2.0
 platformdirs==4.9.6
 pluggy==1.6.0
@@ -92,6 +93,7 @@ PyJWT==2.12.1
 pymongo==4.5.0
 pyparsing==3.3.2
 pypdf==6.10.2
+pytesseract==0.3.13
 pytest==9.0.3
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
