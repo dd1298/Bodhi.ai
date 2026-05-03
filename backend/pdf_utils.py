@@ -16,6 +16,8 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     Image,
     Paragraph,
@@ -26,14 +28,112 @@ from reportlab.platypus import (
 )
 
 
+# Register a Unicode-capable font once so characters like °, ·, ⁻¹, ², ∞, ×
+# render correctly in the PDF. ReportLab's built-in Helvetica is Latin-1 only
+# and silently drops many Unicode glyphs we actually use in physics/math.
+_MPL_FONTS = os.path.join(
+    os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf"
+)
+BODY_FONT = "Helvetica"
+BODY_FONT_BOLD = "Helvetica-Bold"
+BODY_FONT_ITALIC = "Helvetica-Oblique"
+try:
+    pdfmetrics.registerFont(TTFont("DejaVuSans", os.path.join(_MPL_FONTS, "DejaVuSans.ttf")))
+    pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", os.path.join(_MPL_FONTS, "DejaVuSans-Bold.ttf")))
+    pdfmetrics.registerFont(TTFont("DejaVuSans-Oblique", os.path.join(_MPL_FONTS, "DejaVuSans-Oblique.ttf")))
+    from reportlab.pdfbase.pdfmetrics import registerFontFamily
+    registerFontFamily(
+        "DejaVuSans",
+        normal="DejaVuSans",
+        bold="DejaVuSans-Bold",
+        italic="DejaVuSans-Oblique",
+        boldItalic="DejaVuSans-Bold",
+    )
+    BODY_FONT = "DejaVuSans"
+    BODY_FONT_BOLD = "DejaVuSans-Bold"
+    BODY_FONT_ITALIC = "DejaVuSans-Oblique"
+except Exception:
+    # Fall back silently to Helvetica if the DejaVu files aren't available.
+    pass
+
+
 # Cache rendered math equations across a single PDF render so repeated
 # expressions don't get rasterised twice.
 _MATH_CACHE: dict = {}
 
 
+def _normalise_latex(latex: str) -> str:
+    """Normalise a LaTeX snippet so matplotlib's mathtext can render it.
+    Matplotlib mathtext accepts `\\text{...}` in recent versions but we
+    replace it with `\\mathrm{...}` for maximum compatibility, and drop
+    a few commands that mathtext does not support at all."""
+    if not latex:
+        return latex
+    s = latex
+    # Replace \text{...} and \textrm{...} with \mathrm{...}
+    s = re.sub(r"\\text(?:rm|bf|it|sf|tt)?\{([^{}]*)\}", r"\\mathrm{\1}", s)
+    # \operatorname{...} -> \mathrm{...}
+    s = re.sub(r"\\operatorname\*?\{([^{}]*)\}", r"\\mathrm{\1}", s)
+    # Unsupported commands -> drop them (keep the argument if braced)
+    s = re.sub(r"\\boxed\{([^{}]*)\}", r"\1", s)
+    # Normalise \degree to ^\circ
+    s = s.replace(r"\degree", r"^\circ")
+    return s
+
+
+def _strip_latex_for_fallback(latex: str) -> str:
+    """Last-resort textual fallback when mathtext rendering fails. Produce a
+    readable plain-text version of the LaTeX snippet rather than leaking raw
+    backslash commands into the PDF."""
+    if not latex:
+        return ""
+    s = latex
+    # keep contents of common wrappers
+    for cmd in ("mathrm", "text", "textrm", "textbf", "textit", "mathbf", "mathit", "boxed", "vec"):
+        s = re.sub(r"\\" + cmd + r"\{([^{}]*)\}", r"\1", s)
+    # Frac
+    s = re.sub(r"\\d?frac\{([^{}]*)\}\{([^{}]*)\}", r"(\1)/(\2)", s)
+    # Sqrt
+    s = re.sub(r"\\sqrt\{([^{}]*)\}", r"√(\1)", s)
+    # Degree
+    s = re.sub(r"\^\\?circ", "°", s)
+    # Common symbols
+    replacements = {
+        r"\cdot": "·",
+        r"\times": "×",
+        r"\pm": "±",
+        r"\approx": "≈",
+        r"\neq": "≠",
+        r"\leq": "≤",
+        r"\geq": "≥",
+        r"\to": "→",
+        r"\infty": "∞",
+        r"\pi": "π",
+        r"\theta": "θ",
+        r"\alpha": "α",
+        r"\beta": "β",
+        r"\gamma": "γ",
+        r"\mu": "μ",
+        r"\omega": "ω",
+        r"\,": " ",
+        r"\;": " ",
+        r"\:": " ",
+        r"\!": "",
+        r"\ ": " ",
+    }
+    for k, v in replacements.items():
+        s = s.replace(k, v)
+    # strip remaining backslashes from any simple commands
+    s = re.sub(r"\\([a-zA-Z]+)", r"\1", s)
+    # strip braces
+    s = s.replace("{", "").replace("}", "")
+    return s
+
+
 def _render_math_png(latex: str, fontsize: int = 11) -> str | None:
     """Render a LaTeX expression to a transparent PNG using matplotlib mathtext.
     Returns the file path, or None on failure."""
+    latex = _normalise_latex(latex)
     key = (latex, fontsize)
     if key in _MATH_CACHE:
         return _MATH_CACHE[key]
@@ -61,6 +161,27 @@ def _render_math_png(latex: str, fontsize: int = 11) -> str | None:
         return None
 
 
+def _make_diagram_image(img_bytes: bytes, max_width_mm: float = 100, max_height_mm: float = 90):
+    """Build a ReportLab Image that fits within max_width_mm × max_height_mm
+    while preserving the source image's aspect ratio."""
+    try:
+        from PIL import Image as PILImage
+        bio = io.BytesIO(img_bytes)
+        with PILImage.open(bio) as pim:
+            iw, ih = pim.size
+        if iw <= 0 or ih <= 0:
+            return None
+        max_w_pt = max_width_mm * mm
+        max_h_pt = max_height_mm * mm
+        scale = min(max_w_pt / iw, max_h_pt / ih)
+        w = iw * scale
+        h = ih * scale
+        return Image(io.BytesIO(img_bytes), width=w, height=h)
+    except Exception:
+        # Fallback: honour max width, keep a 4:3-ish ratio
+        return Image(io.BytesIO(img_bytes), width=max_width_mm * mm, height=max_height_mm * mm * 0.75)
+
+
 def _math_to_paragraph_html(text: str) -> str:
     """Convert a string with LaTeX delimiters ($...$ and $$...$$) into a
     ReportLab Paragraph-compatible HTML string with inline math images."""
@@ -83,7 +204,14 @@ def _math_to_paragraph_html(text: str) -> str:
             if end == -1:
                 segments.append(("text", text[i:]))
                 break
-            segments.append(("math", text[i + 1 : end]))
+            inner = text[i + 1 : end]
+            # Heuristic: skip bare currency like "$10" where the content is
+            # purely digits/space/commas/dot with no LaTeX markers. Treat as text.
+            if inner and re.fullmatch(r"[\d,\. ]+", inner):
+                segments.append(("text", text[i : end + 1]))
+                i = end + 1
+                continue
+            segments.append(("math", inner))
             i = end + 1
         else:
             # accumulate plain text until next $
@@ -108,12 +236,13 @@ def _math_to_paragraph_html(text: str) -> str:
             png = _render_math_png(val.strip())
             if png:
                 out_parts.append(
-                    f'<img src="{png}" valign="middle" height="14"/>'
+                    f'<img src="{png}" valign="middle" height="13"/>'
                 )
             else:
-                # fallback: keep the raw expression
+                # Friendly textual fallback — no raw backslash commands.
+                friendly = _strip_latex_for_fallback(val)
                 out_parts.append(
-                    val.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    friendly.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 )
     return "".join(out_parts)
 
@@ -258,7 +387,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
     h1 = ParagraphStyle(
         "H1",
         parent=styles["Heading1"],
-        fontName="Helvetica-Bold",
+        fontName=BODY_FONT_BOLD,
         fontSize=20,
         leading=24,
         alignment=1,
@@ -267,7 +396,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
     meta = ParagraphStyle(
         "meta",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=BODY_FONT,
         fontSize=10,
         leading=14,
         alignment=1,
@@ -276,7 +405,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
     section_h = ParagraphStyle(
         "section",
         parent=styles["Heading2"],
-        fontName="Helvetica-Bold",
+        fontName=BODY_FONT_BOLD,
         fontSize=12,
         leading=16,
         spaceBefore=10,
@@ -286,7 +415,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
     q_style = ParagraphStyle(
         "q",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=BODY_FONT,
         fontSize=11,
         leading=15,
         spaceAfter=6,
@@ -294,7 +423,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
     tag_style = ParagraphStyle(
         "tag",
         parent=styles["Normal"],
-        fontName="Helvetica-Oblique",
+        fontName=BODY_FONT_ITALIC,
         fontSize=8,
         leading=10,
         textColor=colors.HexColor("#525252"),
@@ -332,7 +461,8 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
     if instructions:
         story.append(
             Paragraph(
-                f"<b>Instructions:</b> {instructions}", q_style
+                f"<b>Instructions:</b> {_math_to_paragraph_html(instructions)}",
+                q_style,
             )
         )
         story.append(Spacer(1, 4 * mm))
@@ -368,10 +498,11 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
                 try:
                     img_bytes = diagram_loader(q.get("id"), q["diagram_path"])
                     if img_bytes:
-                        img = Image(io.BytesIO(img_bytes), width=80 * mm, height=80 * mm)
-                        img.hAlign = "LEFT"
-                        story.append(Spacer(1, 2 * mm))
-                        story.append(img)
+                        img = _make_diagram_image(img_bytes, max_width_mm=100, max_height_mm=90)
+                        if img is not None:
+                            img.hAlign = "LEFT"
+                            story.append(Spacer(1, 2 * mm))
+                            story.append(img)
                 except Exception:
                     pass
 
@@ -414,7 +545,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
     h1 = ParagraphStyle(
         "H1",
         parent=styles["Heading1"],
-        fontName="Helvetica-Bold",
+        fontName=BODY_FONT_BOLD,
         fontSize=20,
         leading=24,
         alignment=1,
@@ -423,7 +554,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
     meta = ParagraphStyle(
         "meta",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=BODY_FONT,
         fontSize=10,
         leading=14,
         alignment=1,
@@ -432,7 +563,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
     section_h = ParagraphStyle(
         "section",
         parent=styles["Heading2"],
-        fontName="Helvetica-Bold",
+        fontName=BODY_FONT_BOLD,
         fontSize=12,
         leading=16,
         spaceBefore=10,
@@ -442,7 +573,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
     q_style = ParagraphStyle(
         "q",
         parent=styles["Normal"],
-        fontName="Helvetica-Bold",
+        fontName=BODY_FONT_BOLD,
         fontSize=11,
         leading=15,
         spaceAfter=3,
@@ -450,7 +581,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
     a_style = ParagraphStyle(
         "a",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=BODY_FONT,
         fontSize=11,
         leading=15,
         spaceAfter=8,
@@ -460,7 +591,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
     tag_style = ParagraphStyle(
         "tag",
         parent=styles["Normal"],
-        fontName="Helvetica-Oblique",
+        fontName=BODY_FONT_ITALIC,
         fontSize=8,
         leading=10,
         textColor=colors.HexColor("#525252"),
@@ -520,12 +651,11 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
                 try:
                     img_bytes = diagram_loader(q.get("id"), q["diagram_path"])
                     if img_bytes:
-                        img = Image(
-                            io.BytesIO(img_bytes), width=70 * mm, height=70 * mm
-                        )
-                        img.hAlign = "LEFT"
-                        story.append(img)
-                        story.append(Spacer(1, 2 * mm))
+                        img = _make_diagram_image(img_bytes, max_width_mm=90, max_height_mm=80)
+                        if img is not None:
+                            img.hAlign = "LEFT"
+                            story.append(img)
+                            story.append(Spacer(1, 2 * mm))
                 except Exception:
                     pass
 

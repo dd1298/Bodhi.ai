@@ -66,7 +66,9 @@ async def generate_diagram(description: str) -> bytes | None:
             f"Subject/figure: {description}. "
             f"Requirements: white background, crisp black lines, minimal labels, "
             f"textbook/exam-paper style, no shading, no color, no watermark, no photo. "
-            f"Keep it uncluttered and suitable for printing in an exam paper."
+            f"Keep it uncluttered and suitable for printing in an exam paper. "
+            f"Each label must appear exactly once — never duplicate a label, and do not "
+            f"repeat the same element or caption twice in the figure."
         )
         msg = UserMessage(text=prompt)
         _text, images = await chat.send_message_multimodal_response(msg)

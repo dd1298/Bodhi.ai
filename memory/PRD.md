@@ -53,6 +53,19 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Validation that no generated question matches textbook content (similarity check)
 - Admin dashboard & seed admin flow
 
+## What's Implemented — 2026-05-03 (PDF rendering fixes)
+- **Unicode-capable PDF font**: registered DejaVuSans (Bold/Oblique) with ReportLab so characters like `·`, `°`, `⁻¹`, `²`, `π`, `θ`, `×`, `≈` render instead of being silently dropped.
+- **Instructions line now passes through the LaTeX-to-image pipeline** — previously any `$...$` expression in paper instructions leaked as raw backslash syntax.
+- **Diagrams preserve their natural aspect ratio** (via Pillow), bounded by max width/height, no longer squashed into a forced 80×80mm square.
+- **Mathtext fallback** now strips backslash commands into readable plain text (e.g., `\vec{F}=m\vec{a}` → `F=ma`) instead of leaking raw LaTeX.
+- **LLM prompts hardened**: question generation + solution prompts now explicitly forbid raw Unicode superscripts / degree symbols and require `$\mathrm{m\,s^{-1}}$`, `$60^\circ$`, `$N\cdot m$` style LaTeX. Diagram prompt instructs the model to never duplicate labels (fixes Q10 repeated-caption issue).
+
+## Next Action Items
+- Regenerate any previously-broken papers (user verification of the Physics Class 10 paper)
+- Multi-textbook selection flow (code already shipped, still pending agent e2e test)
+- Admin dashboard for bulk pre-indexed textbooks
+- Optional: seed admin account, add "regenerate question" endpoint
+
 ### P1
 - Pre-indexed school-wide textbook library
 - Answer key generation
