@@ -555,14 +555,78 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     if not topics_weighted:
         raise HTTPException(status_code=400, detail="At least one topic required")
 
+    # Insert a placeholder paper immediately so we can return its id within
+    # the proxy's 60s budget. The actual LLM call runs in a background task.
+    paper_id = str(uuid.uuid4())
+    paper_doc = {
+        "id": paper_id,
+        "owner_id": user["id"],
+        "title": req.title,
+        "subject": req.subject,
+        "class_name": req.class_name,
+        "textbook_id": tb_ids[0],  # legacy single for back-compat
+        "textbook_ids": tb_ids,
+        "topics": topics_weighted,
+        "difficulty": req.difficulty,
+        "duration_minutes": req.duration_minutes,
+        "total_marks": req.total_marks,
+        "distribution": dist,
+        "instructions": "",
+        "sections": [],
+        "diagrams_pending": 0,
+        "generation_status": "pending",
+        "generation_error": None,
+        "created_at": utcnow_iso(),
+        "is_deleted": False,
+    }
+    await db.papers.insert_one(paper_doc)
+    paper_doc.pop("_id", None)
+
+    import asyncio as _asyncio
+
+    _asyncio.create_task(
+        _generate_paper_background(
+            paper_id=paper_id,
+            owner_id=user["id"],
+            subject=req.subject,
+            klass=req.class_name,
+            topics_weighted=topics_weighted,
+            difficulty=req.difficulty,
+            distribution=dist,
+            total_marks=req.total_marks,
+            duration_minutes=req.duration_minutes,
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+        )
+    )
+
+    return paper_doc
+
+
+async def _generate_paper_background(
+    paper_id: str,
+    owner_id: str,
+    subject: str,
+    klass: str,
+    topics_weighted: list,
+    difficulty: str,
+    distribution: dict,
+    total_marks: int,
+    duration_minutes: int,
+    context_excerpt: str,
+    feedback_hints: str,
+) -> None:
+    """Run question generation off the request loop so the LLM call doesn't
+    burst the 60s ingress timeout. Writes the result back to the paper doc
+    and updates `generation_status`."""
     prompt = qgen_prompt(
-        subject=req.subject,
-        klass=req.class_name,
+        subject=subject,
+        klass=klass,
         topics_weighted=topics_weighted,
-        difficulty=req.difficulty,
-        distribution=dist,
-        total_marks=req.total_marks,
-        duration=req.duration_minutes,
+        difficulty=difficulty,
+        distribution=distribution,
+        total_marks=total_marks,
+        duration=duration_minutes,
         context_excerpt=context_excerpt,
         feedback_hints=feedback_hints,
     )
@@ -577,9 +641,15 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         data = parse_json_response(raw)
     except Exception as e:  # noqa: BLE001
         logger.exception("Question generation failed")
-        raise HTTPException(status_code=502, detail=f"Generation failed: {e}")
+        await db.papers.update_one(
+            {"id": paper_id},
+            {"$set": {
+                "generation_status": "failed",
+                "generation_error": str(e)[:500],
+            }},
+        )
+        return
 
-    # Attach ids to questions and flag important=False
     sections = data.get("sections") or []
     for s in sections:
         for q in s.get("questions", []):
@@ -587,10 +657,8 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
             q.setdefault("important", False)
             q.setdefault("marks", 2)
             q.setdefault("type", "concept")
-            q.setdefault("difficulty", req.difficulty)
+            q.setdefault("difficulty", difficulty)
             q.setdefault("needs_diagram", False)
-
-    paper_id = str(uuid.uuid4())
 
     # Mark diagram jobs pending so the UI can show "generating" placeholders.
     pending_count = 0
@@ -602,38 +670,20 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
             else:
                 q["diagram_status"] = "none"
 
-    paper_doc = {
-        "id": paper_id,
-        "owner_id": user["id"],
-        "title": req.title,
-        "subject": req.subject,
-        "class_name": req.class_name,
-        "textbook_id": tb_ids[0],  # legacy single for back-compat
-        "textbook_ids": tb_ids,
-        "topics": topics_weighted,
-        "difficulty": req.difficulty,
-        "duration_minutes": req.duration_minutes,
-        "total_marks": req.total_marks,
-        "distribution": dist,
-        "instructions": data.get("instructions", ""),
-        "sections": sections,
-        "diagrams_pending": pending_count,
-        "created_at": utcnow_iso(),
-        "is_deleted": False,
-    }
-    await db.papers.insert_one(paper_doc)
-    paper_doc.pop("_id", None)
+    await db.papers.update_one(
+        {"id": paper_id},
+        {"$set": {
+            "instructions": data.get("instructions", ""),
+            "sections": sections,
+            "diagrams_pending": pending_count,
+            "generation_status": "ready",
+            "generation_error": None,
+        }},
+    )
 
-    # Kick off diagram generation asynchronously so the user gets the paper
-    # immediately — images populate on polling/refresh.
+    # Kick off diagram generation asynchronously.
     if pending_count > 0:
-        import asyncio as _asyncio
-
-        _asyncio.create_task(
-            _generate_diagrams_background(paper_id, user["id"])
-        )
-
-    return paper_doc
+        await _generate_diagrams_background(paper_id, owner_id)
 
 
 async def _generate_diagrams_background(paper_id: str, owner_id: str) -> None:
@@ -840,6 +890,10 @@ async def paper_pdf(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user_id and role != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    if p.get("generation_status") == "pending":
+        raise HTTPException(status_code=409, detail="Paper is still being generated")
+    if p.get("generation_status") == "failed":
+        raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
 
     def _diagram_loader(_qid: str, path: str):
         try:

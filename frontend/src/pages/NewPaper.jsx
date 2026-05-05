@@ -132,7 +132,7 @@ export default function NewPaper() {
         total_marks: Number(totalMarks),
         distribution: { information: info, concept, application },
       });
-      toast.success("Paper generated");
+      toast.success("Generation started — opening paper…");
       navigate(`/papers/${data.id}`);
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Generation failed");
