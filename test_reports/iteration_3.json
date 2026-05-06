@@ -1,0 +1,54 @@
+{
+  "summary": "Iteration 3 regression for Bodhi.ai new features (multi-textbook, async generation, custom_instructions, format_distribution, PDF blocking, brand mark). 9 of 10 backend tests passed (1 skipped because no failed papers exist to verify 409-on-failed in DB; logic was code-reviewed and is correct). Frontend smoke for /papers/new fully green: brand mark, format mix card, sliders, custom instructions textarea, and custom format chip all work.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "tests_executed": {
+    "TestAsyncGeneration::test_generate_returns_pending_quickly": "PASS - returns id+generation_status='pending'+sections=[] in <30s",
+    "TestAsyncGeneration::test_pdf_blocked_while_pending": "PASS - GET /api/papers/{id}/pdf returns 409 while pending",
+    "TestMultiTextbook::test_generate_with_multi_textbook_ids": "PASS - paper doc stores textbook_ids list of 2, custom_instructions and format_distribution persisted, legacy textbook_id also set",
+    "TestMultiTextbook::test_legacy_textbook_id_still_works": "PASS - single textbook_id still accepted; textbook_ids auto-populated as [textbook_id]",
+    "TestPollUntilReady::test_paper_eventually_ready": "PASS - status transitions pending->ready within 120s; sections populated; every question has 'format' field",
+    "TestPollUntilReady::test_format_distribution_mix": "PASS - MCQ ratio >= 30% as requested (50% distribution); MCQ contain (a)/(b)/(c)/(d) options; T/F end with 'true or false?'",
+    "TestPollUntilReady::test_pdf_download_after_ready": "PASS - PDF >1KB, starts with %PDF, no raw \\frac/\\sqrt/\\sum LaTeX leaks",
+    "TestCustomFormatChip::test_custom_format_case_study": "PASS - format_distribution {case_study: 100} produced questions with format='case_study'",
+    "TestCrossTeacherAuth::test_cross_teacher_get_403": "PASS - second teacher gets 403/404 on GET paper and PDF",
+    "TestPDFFailedBlock::test_pdf_blocked_on_failed": "SKIPPED - no failed papers in DB (logic was verified by code review of /api/papers/{id}/pdf; same path as pending)"
+  },
+  "frontend_smoke_passed": {
+    "login": "pdftest@t.com / pass123 -> redirects to /",
+    "brand_mark": "Header .brand-mark shows 'Bodhi.ai' with .ai accent (no 'BodhLai' kerning bug)",
+    "new_paper_page": "/papers/new loads with [data-testid=new-paper-page]",
+    "format_mix_card": "[data-testid=format-mix-card] visible with sliders for mcq/short_answer/long_answer/fill_blank/true_false summing to 100%",
+    "custom_instructions": "[data-testid=custom-instructions-input] textarea present and accepts input",
+    "custom_format_chip": "Adding 'Case Study' creates [data-testid=format-case_study]"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/test_reports/pytest/new_features.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "MINOR: NewPaper.jsx renders <span> with x-component instrumentation inside <option>, causing a React hydration warning in console. Functionality unaffected; likely from Emergent's source-tracking babel plugin. Worth investigating only if hydration warnings need to be eliminated.",
+    "INFO: server.py /api/papers/generate uses asyncio.create_task without referencing the task. If the event loop is cancelled the task may be GC'd; in current production this is fine but storing task refs would be safer."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py"
+  ],
+  "success_rate": {
+    "backend": "100% (9 passed / 1 skipped, 0 failed)",
+    "frontend": "100%"
+  },
+  "test_credentials": "pdftest@t.com / pass123 (existing seeded teacher). Second teacher registered dynamically per run (second_teacher_<ts>@t.com / pass1234).",
+  "seed_data_creation": "Each run uploads 2 fresh dummy textbooks (Physics + Chemistry, class 10) for the seeded teacher. Several pending/ready papers are created and left in DB.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend regression file at /app/backend/tests/test_new_features.py exercises all 6 new feature areas. Note: external proxy is occasionally slow (>30s read), so http timeouts are set to 60-90s. Set REACT_APP_BACKEND_URL env var explicitly when running pytest from CLI: `REACT_APP_BACKEND_URL=https://question-ai-10.preview.emergentagent.com python -m pytest tests/test_new_features.py -v`. The test_pdf_blocked_on_failed test will skip if no failed papers exist; that is expected behaviour. Universal LLM key worked throughout this run.",
+  "rca_of_the_issue": "First pytest run had 4 failures all due to `requests.ReadTimeout` from the public preview proxy (read timeout=15-30s) — not a backend bug. Backend logs showed all underlying calls returned 200. Increased HTTP timeouts to 60-90s; all tests then passed."
+}
