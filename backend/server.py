@@ -1,20 +1,14 @@
-"""FastAPI backend for AI Question Paper Generator."""
-import logging
+"""FastAPI backend for Bodhi.ai (AI Question Paper Generator)."""
+# deps must be imported FIRST — it loads .env so subsequent imports
+# (auth.JWT_SECRET, llm_adapter API keys, storage credentials) succeed.
+from deps import api_router, app, client, db, logger, utcnow_iso  # noqa: I001
+
 import os
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
-
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / ".env")
-
 from fastapi import (
-    APIRouter,
     Depends,
-    FastAPI,
     File,
     Header,
     HTTPException,
@@ -22,7 +16,6 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from starlette.middleware.cors import CORSMiddleware
 
@@ -34,30 +27,21 @@ from auth import (
     require_role,
     verify_password,
 )
-from llm_adapter import chat_complete, generate_diagram, parse_json_response
+from llm_adapter import chat_complete, parse_json_response
 from pdf_utils import chunk_text, extract_text, render_paper_pdf, render_solution_pdf
 from prompts import (
-    qgen_prompt,
     qpaper_extract_prompt,
-    solution_prompt,
     topic_extract_prompt,
     QPAPER_EXTRACT_SYSTEM,
-    SOLUTION_SYSTEM,
 )
 from storage import APP_NAME, get_object, init_storage, put_object
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+from workers import (
+    build_solution_for_paper,
+    generate_diagrams_background,
+    generate_paper_background,
+    generate_solution_background,
+    load_paper_feedback_hints,
 )
-logger = logging.getLogger(__name__)
-
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
-
-app = FastAPI(title="AI Question Paper Generator")
-api_router = APIRouter(prefix="/api")
 
 
 # =========================================================
@@ -176,10 +160,6 @@ class SolutionPatch(BaseModel):
 # =========================================================
 # Helpers
 # =========================================================
-def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def serialize_user(doc: dict) -> dict:
     return {
         "id": doc["id"],
@@ -480,77 +460,7 @@ async def delete_textbook(textbook_id: str, user: dict = Depends(get_current_use
 # Papers
 # =========================================================
 async def _load_feedback_hints(user_id: str, subject: str, class_name: str) -> str:
-    """Build a short feedback-hints block from recent user edits.
-
-    We pull the most recent modify/add edits for the same subject+class and
-    summarise them so the LLM can adapt future generations to teacher style."""
-    try:
-        edits = (
-            await db.paper_edits.find(
-                {
-                    "owner_id": user_id,
-                    "subject": subject,
-                    "class_name": class_name,
-                },
-                {"_id": 0},
-            )
-            .sort("created_at", -1)
-            .to_list(8)
-        )
-    except Exception:
-        return ""
-    if not edits:
-        return ""
-    lines = []
-    for e in edits:
-        kind = e.get("edit_type")
-        if kind == "modify_question":
-            orig = (e.get("original") or "")[:150]
-            new = (e.get("revised") or "")[:150]
-            if orig and new:
-                lines.append(f"- TEACHER REPHRASED: '{orig}'  →  '{new}'")
-        elif kind == "delete_question":
-            q = (e.get("original") or "")[:150]
-            if q:
-                lines.append(f"- TEACHER REMOVED style: '{q}' (avoid similar)")
-        elif kind == "add_question":
-            q = (e.get("revised") or "")[:150]
-            if q:
-                lines.append(f"- TEACHER ADDED style: '{q}' (prefer similar)")
-    return "\n".join(lines[:10])
-
-
-async def _generate_diagrams_for_paper(paper_id: str, owner_id: str, sections: list) -> list:
-    """Generate diagrams (in parallel) for questions with needs_diagram=true.
-
-    Saves PNGs to object storage and attaches `diagram_path` to each question.
-    Best-effort: a failed diagram leaves the question without an image.
-    """
-    import asyncio as _asyncio
-
-    jobs = []
-    targets = []
-    for s in sections:
-        for q in s.get("questions", []):
-            if q.get("needs_diagram") and q.get("diagram_description"):
-                targets.append(q)
-                jobs.append(generate_diagram(q["diagram_description"]))
-    if not jobs:
-        return sections
-    # Cap concurrency at 5 diagrams to avoid stalls
-    jobs = jobs[:5]
-    targets = targets[:5]
-    results = await _asyncio.gather(*jobs, return_exceptions=True)
-    for q, img_bytes in zip(targets, results):
-        if isinstance(img_bytes, Exception) or not img_bytes:
-            continue
-        try:
-            path = f"{APP_NAME}/diagrams/{owner_id}/{paper_id}/{q['id']}.png"
-            saved = put_object(path, img_bytes, "image/png")
-            q["diagram_path"] = saved["path"]
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Failed to save diagram: {e}")
-    return sections
+    return await load_paper_feedback_hints(user_id, subject, class_name)
 
 
 @api_router.post("/papers/generate")
@@ -650,7 +560,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     import asyncio as _asyncio
 
     _asyncio.create_task(
-        _generate_paper_background(
+        generate_paper_background(
             paper_id=paper_id,
             owner_id=user["id"],
             subject=req.subject,
@@ -669,124 +579,6 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     )
 
     return paper_doc
-
-
-async def _generate_paper_background(
-    paper_id: str,
-    owner_id: str,
-    subject: str,
-    klass: str,
-    topics_weighted: list,
-    difficulty: str,
-    distribution: dict,
-    total_marks: int,
-    duration_minutes: int,
-    context_excerpt: str,
-    feedback_hints: str,
-    format_distribution: Optional[dict] = None,
-    custom_instructions: str = "",
-    section_blueprint: str = "",
-) -> None:
-    """Run question generation off the request loop so the LLM call doesn't
-    burst the 60s ingress timeout. Writes the result back to the paper doc
-    and updates `generation_status`."""
-    prompt = qgen_prompt(
-        subject=subject,
-        klass=klass,
-        topics_weighted=topics_weighted,
-        difficulty=difficulty,
-        distribution=distribution,
-        total_marks=total_marks,
-        duration=duration_minutes,
-        context_excerpt=context_excerpt,
-        feedback_hints=feedback_hints,
-        format_distribution=format_distribution or {},
-        custom_instructions=custom_instructions or "",
-        section_blueprint=section_blueprint or "",
-    )
-    try:
-        raw = await chat_complete(
-            system_message=(
-                "You create original, high-quality exam questions in strict JSON. "
-                "Never copy textbook content."
-            ),
-            user_text=prompt,
-        )
-        data = parse_json_response(raw)
-    except Exception as e:  # noqa: BLE001
-        logger.exception("Question generation failed")
-        await db.papers.update_one(
-            {"id": paper_id},
-            {"$set": {
-                "generation_status": "failed",
-                "generation_error": str(e)[:500],
-            }},
-        )
-        return
-
-    sections = data.get("sections") or []
-    for s in sections:
-        for q in s.get("questions", []):
-            q["id"] = str(uuid.uuid4())
-            q.setdefault("important", False)
-            q.setdefault("marks", 2)
-            q.setdefault("type", "concept")
-            q.setdefault("difficulty", difficulty)
-            q.setdefault("needs_diagram", False)
-            q.setdefault("format", "")
-
-    # Mark diagram jobs pending so the UI can show "generating" placeholders.
-    pending_count = 0
-    for s in sections:
-        for q in s.get("questions", []):
-            if q.get("needs_diagram") and q.get("diagram_description"):
-                q["diagram_status"] = "pending"
-                pending_count += 1
-            else:
-                q["diagram_status"] = "none"
-
-    await db.papers.update_one(
-        {"id": paper_id},
-        {"$set": {
-            "instructions": data.get("instructions", ""),
-            "sections": sections,
-            "diagrams_pending": pending_count,
-            "generation_status": "ready",
-            "generation_error": None,
-        }},
-    )
-
-    # Kick off diagram generation asynchronously.
-    if pending_count > 0:
-        await _generate_diagrams_background(paper_id, owner_id)
-
-
-async def _generate_diagrams_background(paper_id: str, owner_id: str) -> None:
-    """Run diagram generation for a paper and update its sections in-place."""
-    try:
-        p = await db.papers.find_one(
-            {"id": paper_id, "is_deleted": False}, {"_id": 0}
-        )
-        if not p:
-            return
-        sections = p.get("sections", [])
-        sections = await _generate_diagrams_for_paper(paper_id, owner_id, sections)
-        # Mark statuses
-        remaining = 0
-        for s in sections:
-            for q in s.get("questions", []):
-                if q.get("diagram_path"):
-                    q["diagram_status"] = "ready"
-                elif q.get("diagram_status") == "pending":
-                    q["diagram_status"] = "failed"
-                    remaining += 1
-        await db.papers.update_one(
-            {"id": paper_id},
-            {"$set": {"sections": sections, "diagrams_pending": 0}},
-        )
-        logger.info(f"Diagram background job finished for {paper_id}")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Diagram background job failed: {e}")
 
 
 @api_router.patch("/papers/{paper_id}")
@@ -1030,130 +822,6 @@ async def paper_diagram(
 # =========================================================
 # Solutions (answer keys)
 # =========================================================
-async def _load_solution_feedback(user_id: str, subject: str, class_name: str) -> str:
-    try:
-        edits = (
-            await db.solution_edits.find(
-                {
-                    "owner_id": user_id,
-                    "subject": subject,
-                    "class_name": class_name,
-                },
-                {"_id": 0},
-            )
-            .sort("created_at", -1)
-            .to_list(8)
-        )
-    except Exception:
-        return ""
-    if not edits:
-        return ""
-    lines = []
-    for e in edits:
-        orig = (e.get("original") or "")[:180]
-        new = (e.get("revised") or "")[:180]
-        if orig and new:
-            lines.append(
-                f"- TEACHER REWORDED ANSWER: '{orig}'  →  '{new}'"
-            )
-    return "\n".join(lines[:10])
-
-
-async def _build_solution_for_paper(paper: dict, user_id: str) -> dict:
-    """Generate a solution for a single paper. Returns the solution dict.
-    Raises HTTPException on failure. Does not persist.
-
-    Questions are processed in batches of 5 so long/hard papers don't blow
-    past LLM token limits or trigger gateway timeouts."""
-    BATCH_SIZE = 5
-
-    questions_payload = []
-    for s in paper.get("sections", []):
-        for q in s.get("questions", []):
-            if not q.get("question"):
-                continue
-            questions_payload.append({
-                "id": q["id"],
-                "question": q["question"],
-                "type": q.get("type", "concept"),
-                "marks": q.get("marks", 2),
-            })
-    if not questions_payload:
-        raise HTTPException(status_code=400, detail="Paper has no questions to solve")
-
-    tb_ids = paper.get("textbook_ids") or (
-        [paper["textbook_id"]] if paper.get("textbook_id") else []
-    )
-    merged_chunks: list = []
-    max_per = max(2, 5 // max(1, len(tb_ids)))
-    for tid in tb_ids:
-        tb = await db.textbooks.find_one(
-            {"id": tid, "is_deleted": False}, {"_id": 0}
-        )
-        if tb:
-            merged_chunks.extend((tb.get("chunks") or [])[:max_per])
-    context_excerpt = "\n\n".join(merged_chunks)[:8000]
-
-    feedback_hints = await _load_solution_feedback(
-        user_id, paper.get("subject", ""), paper.get("class_name", "")
-    )
-
-    answers: dict[str, str] = {}
-    last_err: Exception | None = None
-    n_batches = (len(questions_payload) + BATCH_SIZE - 1) // BATCH_SIZE
-    for bi in range(n_batches):
-        batch = questions_payload[bi * BATCH_SIZE : (bi + 1) * BATCH_SIZE]
-        prompt = solution_prompt(
-            subject=paper.get("subject", ""),
-            klass=paper.get("class_name", ""),
-            context_excerpt=context_excerpt,
-            questions_payload=batch,
-            feedback_hints=feedback_hints,
-        )
-        for attempt in range(2):  # 1 retry on transient failure
-            try:
-                raw = await chat_complete(
-                    system_message=SOLUTION_SYSTEM, user_text=prompt
-                )
-                data = parse_json_response(raw)
-                for a in data.get("answers") or []:
-                    qid = a.get("question_id")
-                    text = (a.get("answer") or "").strip()
-                    if qid and text:
-                        answers[qid] = text
-                last_err = None
-                break
-            except Exception as e:  # noqa: BLE001
-                last_err = e
-                logger.warning(
-                    f"Solution batch {bi + 1}/{n_batches} attempt {attempt + 1} failed: {e}"
-                )
-        # Continue with next batch even if this one failed — partial solutions
-        # are still useful; missing answers will simply be empty strings.
-
-    if not answers and last_err:
-        # All batches failed.
-        raise HTTPException(
-            status_code=502, detail=f"Solution failed: {last_err}"
-        )
-
-    solution_sections = []
-    for s in paper.get("sections", []):
-        ans_list = []
-        for q in s.get("questions", []):
-            ans_list.append(
-                {"question_id": q["id"], "answer": answers.get(q["id"], "")}
-            )
-        solution_sections.append(
-            {"title": s.get("title", "Section"), "answers": ans_list}
-        )
-    return {
-        "generated_at": utcnow_iso(),
-        "is_stale": False,
-        "sections": solution_sections,
-    }
-
-
 @api_router.post("/papers/{paper_id}/solution/generate")
 async def generate_solution(paper_id: str, user: dict = Depends(get_current_user)):
     p = await db.papers.find_one(
@@ -1195,120 +863,9 @@ async def generate_solution(paper_id: str, user: dict = Depends(get_current_user
     import asyncio as _asyncio
 
     _asyncio.create_task(
-        _generate_solution_background(paper_id, user["id"])
+        generate_solution_background(paper_id, user["id"])
     )
     return pending_solution
-
-
-async def _generate_solution_background(paper_id: str, user_id: str) -> None:
-    """Run batched solution generation, updating the paper doc as each batch
-    completes so the frontend can show progress."""
-    BATCH_SIZE = 5
-    try:
-        p = await db.papers.find_one(
-            {"id": paper_id, "is_deleted": False}, {"_id": 0}
-        )
-        if not p:
-            return
-
-        questions_payload: list = []
-        for s in p.get("sections", []):
-            for q in s.get("questions", []):
-                if not q.get("question"):
-                    continue
-                questions_payload.append({
-                    "id": q["id"],
-                    "question": q["question"],
-                    "type": q.get("type", "concept"),
-                    "marks": q.get("marks", 2),
-                })
-
-        tb_ids = p.get("textbook_ids") or (
-            [p["textbook_id"]] if p.get("textbook_id") else []
-        )
-        merged_chunks: list = []
-        max_per = max(2, 5 // max(1, len(tb_ids)))
-        for tid in tb_ids:
-            tb = await db.textbooks.find_one(
-                {"id": tid, "is_deleted": False}, {"_id": 0}
-            )
-            if tb:
-                merged_chunks.extend((tb.get("chunks") or [])[:max_per])
-        context_excerpt = "\n\n".join(merged_chunks)[:8000]
-
-        feedback_hints = await _load_solution_feedback(
-            user_id, p.get("subject", ""), p.get("class_name", "")
-        )
-
-        answers: dict[str, str] = {}
-        n_batches = (len(questions_payload) + BATCH_SIZE - 1) // BATCH_SIZE
-        for bi in range(n_batches):
-            batch = questions_payload[bi * BATCH_SIZE : (bi + 1) * BATCH_SIZE]
-            prompt = solution_prompt(
-                subject=p.get("subject", ""),
-                klass=p.get("class_name", ""),
-                context_excerpt=context_excerpt,
-                questions_payload=batch,
-                feedback_hints=feedback_hints,
-            )
-            for attempt in range(2):
-                try:
-                    raw = await chat_complete(
-                        system_message=SOLUTION_SYSTEM, user_text=prompt
-                    )
-                    data = parse_json_response(raw)
-                    for a in data.get("answers") or []:
-                        qid = a.get("question_id")
-                        text = (a.get("answer") or "").strip()
-                        if qid and text:
-                            answers[qid] = text
-                    break
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        f"Solution batch {bi + 1}/{n_batches} attempt {attempt + 1} failed: {e}"
-                    )
-
-            # After each batch, persist progress so the UI can show it
-            current = await db.papers.find_one(
-                {"id": paper_id}, {"_id": 0, "solution": 1}
-            )
-            sol = (current or {}).get("solution") or {}
-            for sec in sol.get("sections", []):
-                for ans in sec.get("answers", []):
-                    qid = ans.get("question_id")
-                    if qid in answers:
-                        ans["answer"] = answers[qid]
-            sol["completed"] = sum(
-                1
-                for sec in sol.get("sections", [])
-                for ans in sec.get("answers", [])
-                if ans.get("answer")
-            )
-            sol["status"] = "generating"
-            await db.papers.update_one(
-                {"id": paper_id}, {"$set": {"solution": sol}}
-            )
-
-        # Mark complete (or partial)
-        current = await db.papers.find_one(
-            {"id": paper_id}, {"_id": 0, "solution": 1}
-        )
-        sol = (current or {}).get("solution") or {}
-        completed = sol.get("completed", 0)
-        sol["status"] = "ready" if completed == sol.get("total", 0) else "partial"
-        sol["finished_at"] = utcnow_iso()
-        await db.papers.update_one(
-            {"id": paper_id}, {"$set": {"solution": sol}}
-        )
-        logger.info(
-            f"Solution background job finished for {paper_id}: {completed}/{sol.get('total', 0)}"
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"Solution background job crashed: {e}")
-        await db.papers.update_one(
-            {"id": paper_id},
-            {"$set": {"solution.status": "failed", "solution.error": str(e)[:300]}},
-        )
 
 
 @api_router.post("/papers/solutions/bulk-generate")
@@ -1342,7 +899,7 @@ async def bulk_generate_solutions(
     failed: list = []
     for p in queued:
         try:
-            solution = await _build_solution_for_paper(p, user["id"])
+            solution = await build_solution_for_paper(p, user["id"])
             await db.papers.update_one(
                 {"id": p["id"]}, {"$set": {"solution": solution}}
             )
@@ -1648,136 +1205,10 @@ async def upload_qpaper(
     }
 
 
-def _require_admin(user: dict) -> None:
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-
 # =========================================================
-# Admin Dashboard
+# Admin Dashboard — registered via side-effect import
 # =========================================================
-@api_router.get("/admin/overview")
-async def admin_overview(user: dict = Depends(get_current_user)):
-    _require_admin(user)
-    teachers = await db.users.count_documents({"role": "teacher"})
-    admins = await db.users.count_documents({"role": "admin"})
-    textbooks_total = await db.textbooks.count_documents({"is_deleted": False})
-    textbooks_shared = await db.textbooks.count_documents(
-        {"is_deleted": False, "is_shared": True}
-    )
-    papers_total = await db.papers.count_documents({"is_deleted": False})
-    papers_pending = await db.papers.count_documents(
-        {"is_deleted": False, "generation_status": "pending"}
-    )
-    papers_failed = await db.papers.count_documents(
-        {"is_deleted": False, "generation_status": "failed"}
-    )
-    return {
-        "teachers": teachers,
-        "admins": admins,
-        "textbooks_total": textbooks_total,
-        "textbooks_shared": textbooks_shared,
-        "papers_total": papers_total,
-        "papers_pending": papers_pending,
-        "papers_failed": papers_failed,
-    }
-
-
-@api_router.get("/admin/users")
-async def admin_users(user: dict = Depends(get_current_user)):
-    _require_admin(user)
-    users = await db.users.find(
-        {}, {"_id": 0, "password_hash": 0}
-    ).sort("created_at", -1).to_list(500)
-    # Attach per-user counts
-    out = []
-    for u in users:
-        tb_count = await db.textbooks.count_documents(
-            {"is_deleted": False, "owner_id": u["id"]}
-        )
-        paper_count = await db.papers.count_documents(
-            {"is_deleted": False, "owner_id": u["id"]}
-        )
-        out.append({**u, "textbook_count": tb_count, "paper_count": paper_count})
-    return out
-
-
-@api_router.get("/admin/textbooks")
-async def admin_textbooks(user: dict = Depends(get_current_user)):
-    _require_admin(user)
-    tbs = await db.textbooks.find(
-        {"is_deleted": False}, {"_id": 0, "chunks": 0}
-    ).sort("created_at", -1).to_list(500)
-    # Look up owner emails in one pass
-    owner_ids = list({t["owner_id"] for t in tbs})
-    owners = await db.users.find(
-        {"id": {"$in": owner_ids}}, {"_id": 0, "id": 1, "email": 1, "role": 1}
-    ).to_list(len(owner_ids))
-    by_id = {o["id"]: o for o in owners}
-    out = []
-    for t in tbs:
-        owner = by_id.get(t["owner_id"], {})
-        out.append({
-            "id": t["id"],
-            "original_filename": t["original_filename"],
-            "subject": t["subject"],
-            "class_name": t["class_name"],
-            "status": t["status"],
-            "topic_count": len(t.get("topics", [])),
-            "chunk_count": t.get("chunk_count", 0),
-            "is_shared": t.get("is_shared", False),
-            "created_at": t["created_at"],
-            "owner_id": t["owner_id"],
-            "owner_email": owner.get("email", ""),
-            "owner_role": owner.get("role", ""),
-        })
-    return out
-
-
-@api_router.patch("/admin/textbooks/{textbook_id}/share")
-async def admin_set_textbook_shared(
-    textbook_id: str,
-    is_shared: bool = Query(...),
-    user: dict = Depends(get_current_user),
-):
-    _require_admin(user)
-    tb = await db.textbooks.find_one(
-        {"id": textbook_id, "is_deleted": False}, {"_id": 0}
-    )
-    if not tb:
-        raise HTTPException(status_code=404, detail="Textbook not found")
-    await db.textbooks.update_one(
-        {"id": textbook_id}, {"$set": {"is_shared": bool(is_shared)}}
-    )
-    return {"id": textbook_id, "is_shared": bool(is_shared)}
-
-
-@api_router.get("/admin/papers")
-async def admin_papers(user: dict = Depends(get_current_user)):
-    _require_admin(user)
-    papers = await db.papers.find(
-        {"is_deleted": False},
-        {"_id": 0, "sections": 0, "topics": 0, "chunks": 0},
-    ).sort("created_at", -1).to_list(500)
-    owner_ids = list({p["owner_id"] for p in papers})
-    owners = await db.users.find(
-        {"id": {"$in": owner_ids}}, {"_id": 0, "id": 1, "email": 1}
-    ).to_list(len(owner_ids))
-    by_id = {o["id"]: o["email"] for o in owners}
-    return [
-        {
-            "id": p["id"],
-            "title": p.get("title", ""),
-            "subject": p.get("subject", ""),
-            "class_name": p.get("class_name", ""),
-            "total_marks": p.get("total_marks", 0),
-            "generation_status": p.get("generation_status", "ready"),
-            "created_at": p.get("created_at", ""),
-            "owner_id": p["owner_id"],
-            "owner_email": by_id.get(p["owner_id"], ""),
-        }
-        for p in papers
-    ]
+import admin_routes  # noqa: F401, E402  pylint: disable=wrong-import-position
 
 
 # =========================================================
@@ -1785,7 +1216,7 @@ async def admin_papers(user: dict = Depends(get_current_user)):
 # =========================================================
 @api_router.get("/")
 async def root():
-    return {"message": "AI Question Paper Generator API"}
+    return {"message": "Bodhi.ai - Question Paper API"}
 
 
 app.include_router(api_router)

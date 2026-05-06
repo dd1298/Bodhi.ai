@@ -56,6 +56,14 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Validation that no generated question matches textbook content (similarity check)
 - Admin dashboard & seed admin flow
 
+## What's Implemented — 2026-05-06 (Backend refactor + Blueprint regression)
+- **Backend modularised**: `server.py` reduced from **1798 → 1229 lines** (32% smaller). New modules:
+  - `/app/backend/deps.py` (39 lines) — shared `app`, `api_router`, `db`, `client`, `logger`, `utcnow_iso`, `require_admin`. Loads `.env` so JWT/LLM/storage keys are available before any other module imports.
+  - `/app/backend/workers.py` (435 lines) — all background LLM jobs: `load_paper_feedback_hints`, `load_solution_feedback`, `generate_diagrams_for_paper`, `generate_diagrams_background`, `generate_paper_background`, `build_solution_for_paper`, `generate_solution_background`. (Previously `_`-prefixed locals in server.py.)
+  - `/app/backend/admin_routes.py` (128 lines) — all 5 `/api/admin/*` endpoints, registered via side-effect import.
+- `server.py` now imports `from deps` first (to load `.env`), then auth, then workers; admin routes are pulled in via `import admin_routes` at the bottom.
+- **End-to-end verified post-refactor**: admin auth + all 5 admin endpoints (200 admin / 403 teacher), share toggle round-trip, ICSE blueprint generation produced exact 25-question Section A (40m) + 6-question Section B (10m each, "Attempt any FOUR of SIX") and a 850 KB PDF with **zero red pixels on every page**.
+
 ## What's Implemented — 2026-05-06 (Paper Blueprint + spell-check fix)
 - **Paper Blueprint** (free-form textarea on New Paper page, optional). When set, the AI **overrides** the Bloom-based Section A/B/C split and reproduces the user's blueprint verbatim — section titles, marks per section, internal-choice rules ("attempt any 4 of 6"), per-question formats, sub-parts. Two preset buttons: **Use ICSE Class 10 (80m/2h)** and **Use CBSE Class 10 (80m/3h)**. Stored on paper doc as `section_blueprint` and threaded through `qgen_prompt` as a HIGHEST-PRIORITY block. Verified end-to-end: ICSE blueprint produced 25 questions in Section A (15 MCQ + 6 fill + 4 SA = 40m) and 6 alternatives × 10m in Section B with the exact title `"Section B (40 marks) — Attempt any FOUR of the following SIX questions"`.
 - **Spell-check disabled** (`spellCheck={false}`) on all editable inputs across PaperView (title / instructions / question text) + SolutionView (answer textarea) + NewPaper (blueprint + custom instructions). Browser was drawing red squiggly underlines under physics terms (`kgf`, `mitochondrion`) and unit symbols, which the user mistook for stray red marks in the paper — actual PDF has zero red pixels (verified at pixel level).

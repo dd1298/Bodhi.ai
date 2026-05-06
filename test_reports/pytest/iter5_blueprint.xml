@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="3" failures="1" skipped="0" tests="7" time="276.646" timestamp="2026-05-06T08:15:38.081976+00:00" hostname="agent-env-a6bddc05-dbe3-4348-a923-e84dda5a5b15"><testcase classname="backend.tests.test_refactor_blueprint.TestPaperGenerateRegression" name="test_default_3_bloom_sections" time="43.233" /><testcase classname="backend.tests.test_refactor_blueprint.TestPaperGenerateRegression" name="test_papers_list_includes_paper" time="51.913" /><testcase classname="backend.tests.test_refactor_blueprint.TestPaperGenerateRegression" name="test_paper_pdf_bytes" time="0.849" /><testcase classname="backend.tests.test_refactor_blueprint.TestBlueprintCBSE" name="test_five_sections" time="60.208"><error message="failed on setup with &quot;AssertionError: The preview environment is not responding. It may be starting up.&#10;  &#10;assert 502 == 200&#10; +  where 502 = &lt;Response [502]&gt;.status_code&quot;">E   AssertionError: The preview environment is not responding. It may be starting up.
+      
+    assert 502 == 200
+     +  where 502 = &lt;Response [502]&gt;.status_code</error></testcase><testcase classname="backend.tests.test_refactor_blueprint.TestBlueprintCBSE" name="test_cbse_per_section_counts" time="0.000"><error message="failed on setup with &quot;AssertionError: The preview environment is not responding. It may be starting up.&#10;  &#10;assert 502 == 200&#10; +  where 502 = &lt;Response [502]&gt;.status_code&quot;">E   AssertionError: The preview environment is not responding. It may be starting up.
+      
+    assert 502 == 200
+     +  where 502 = &lt;Response [502]&gt;.status_code</error></testcase><testcase classname="backend.tests.test_refactor_blueprint.TestBlueprintCustom" name="test_one_section_five_essays" time="60.161"><error message="failed on setup with &quot;requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='question-ai-10.preview.emergentagent.com', port=443): Read timed out. (read timeout=60)&quot;">E   TimeoutError: The read operation timed out
+
+The above exception was the direct cause of the following exception:
+E   urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host='question-ai-10.preview.emergentagent.com', port=443): Read timed out. (read timeout=60)
+
+During handling of the above exception, another exception occurred:
+E   requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='question-ai-10.preview.emergentagent.com', port=443): Read timed out. (read timeout=60)</error></testcase><testcase classname="backend.tests.test_refactor_blueprint.TestSolutionRegression" name="test_solution_generate_endpoint_returns_pending" time="60.209"><failure message="requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='question-ai-10.preview.emergentagent.com', port=443): Read timed out. (read timeout=60)">E   TimeoutError: The read operation timed out
+
+The above exception was the direct cause of the following exception:
+E   urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host='question-ai-10.preview.emergentagent.com', port=443): Read timed out. (read timeout=60)
+
+During handling of the above exception, another exception occurred:
+E   requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='question-ai-10.preview.emergentagent.com', port=443): Read timed out. (read timeout=60)</failure></testcase></testsuite></testsuites>
