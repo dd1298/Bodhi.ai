@@ -56,6 +56,10 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Validation that no generated question matches textbook content (similarity check)
 - Admin dashboard & seed admin flow
 
+## What's Implemented — 2026-05-06 (Paper Blueprint + spell-check fix)
+- **Paper Blueprint** (free-form textarea on New Paper page, optional). When set, the AI **overrides** the Bloom-based Section A/B/C split and reproduces the user's blueprint verbatim — section titles, marks per section, internal-choice rules ("attempt any 4 of 6"), per-question formats, sub-parts. Two preset buttons: **Use ICSE Class 10 (80m/2h)** and **Use CBSE Class 10 (80m/3h)**. Stored on paper doc as `section_blueprint` and threaded through `qgen_prompt` as a HIGHEST-PRIORITY block. Verified end-to-end: ICSE blueprint produced 25 questions in Section A (15 MCQ + 6 fill + 4 SA = 40m) and 6 alternatives × 10m in Section B with the exact title `"Section B (40 marks) — Attempt any FOUR of the following SIX questions"`.
+- **Spell-check disabled** (`spellCheck={false}`) on all editable inputs across PaperView (title / instructions / question text) + SolutionView (answer textarea) + NewPaper (blueprint + custom instructions). Browser was drawing red squiggly underlines under physics terms (`kgf`, `mitochondrion`) and unit symbols, which the user mistook for stray red marks in the paper — actual PDF has zero red pixels (verified at pixel level).
+
 ## What's Implemented — 2026-05-06 (P1 Admin Dashboard)
 - **Seeded admin** `admin@bodhi.ai` / `admin123` (idempotent on backend startup; documented in `/app/memory/test_credentials.md`).
 - **Shared library**: `is_shared` flag on textbook docs; admin can toggle via `PATCH /api/admin/textbooks/{id}/share?is_shared=…`. Shared books appear in every teacher's `/api/textbooks` list with `is_owned=false`, are read-only on the Textbooks page, and can be used as sources in paper generation. Generate / get-textbook endpoints now allow access to shared books. Teachers cannot self-share at upload time (only admin role honors `?is_shared=true`).

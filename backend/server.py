@@ -122,6 +122,11 @@ class PaperRequest(BaseModel):
     # {"mcq": 20, "short_answer": 40, "long_answer": 30, "fill_blank": 10}.
     # Keys may be any string — built-in or teacher-defined custom labels.
     format_distribution: Optional[Dict[str, int]] = None
+    # Optional free-form section blueprint that, when provided, overrides
+    # the default Bloom-based 3-section split. Teachers can paste any
+    # board-specific pattern (ICSE / CBSE / IGCSE / etc.) describing
+    # sections, marks, internal-choice rules, question counts, and formats.
+    section_blueprint: Optional[str] = None
 
 
 class QuestionInput(BaseModel):
@@ -614,6 +619,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     paper_id = str(uuid.uuid4())
     fmt_dist = {k: int(v) for k, v in (req.format_distribution or {}).items() if int(v) > 0}
     custom_instructions = (req.custom_instructions or "").strip()
+    section_blueprint = (req.section_blueprint or "").strip()
     paper_doc = {
         "id": paper_id,
         "owner_id": user["id"],
@@ -629,6 +635,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "distribution": dist,
         "format_distribution": fmt_dist,
         "custom_instructions": custom_instructions,
+        "section_blueprint": section_blueprint,
         "instructions": "",
         "sections": [],
         "diagrams_pending": 0,
@@ -657,6 +664,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
             feedback_hints=feedback_hints,
             format_distribution=fmt_dist,
             custom_instructions=custom_instructions,
+            section_blueprint=section_blueprint,
         )
     )
 
@@ -677,6 +685,7 @@ async def _generate_paper_background(
     feedback_hints: str,
     format_distribution: Optional[dict] = None,
     custom_instructions: str = "",
+    section_blueprint: str = "",
 ) -> None:
     """Run question generation off the request loop so the LLM call doesn't
     burst the 60s ingress timeout. Writes the result back to the paper doc
@@ -693,6 +702,7 @@ async def _generate_paper_background(
         feedback_hints=feedback_hints,
         format_distribution=format_distribution or {},
         custom_instructions=custom_instructions or "",
+        section_blueprint=section_blueprint or "",
     )
     try:
         raw = await chat_complete(

@@ -21,6 +21,26 @@ const DEFAULT_FORMATS = [
   { key: "true_false", label: "True / False", default: 10 },
 ];
 
+const ICSE_CLASS_10_BLUEPRINT = `Section A (40 marks, compulsory — answer ALL)
+- Q1: 15 multiple-choice questions, 1 mark each. Each MCQ must have 4 options labelled (a)-(d). Cover the full topic list.
+- Q2: 6 fill-in-the-blank questions, 1 mark each. Provide a short word-bank in brackets where useful.
+- Q3: 4-5 short-answer parts (i)-(v), totalling 19 marks. Mix of definitions, reasoning, simple numerical, and graph/figure interpretation.
+
+Section B (40 marks) — Attempt any FOUR out of the following SIX questions
+- Q4 to Q9: 10 marks each, every question subdivided into (a) 3 marks + (b) 3 marks + (c) 4 marks.
+- Each question covers ONE main topic in depth and mixes conceptual, derivation, and numerical parts.
+- Section title MUST literally read: "Section B (40 Marks) — Attempt any FOUR of the following SIX questions".
+
+Total: 80 marks, 2 hours. Print "[15 minutes reading time, no writing allowed]" in the instructions line.`;
+
+const CBSE_CLASS_10_BLUEPRINT = `Section A (16 marks) — 16 MCQs of 1 mark each (4 options).
+Section B (10 marks) — 5 Very Short Answer questions of 2 marks each.
+Section C (21 marks) — 7 Short Answer questions of 3 marks each.
+Section D (20 marks) — 4 Long Answer questions of 5 marks each (internal choice in 2 of them).
+Section E (12 marks) — 3 Case-Study/Source-Based questions of 4 marks each, each with sub-parts (a) 1m + (b) 1m + (c) 2m.
+
+Total: 80 marks, 3 hours.`;
+
 export default function NewPaper() {
   const navigate = useNavigate();
   const [textbooks, setTextbooks] = useState([]);
@@ -36,6 +56,7 @@ export default function NewPaper() {
   const [generating, setGenerating] = useState(false);
   const [extractingId, setExtractingId] = useState(null);
   const [customInstructions, setCustomInstructions] = useState("");
+  const [sectionBlueprint, setSectionBlueprint] = useState("");
   // Format mix: array of { key, label, value, custom }
   const [formats, setFormats] = useState(
     DEFAULT_FORMATS.map((f) => ({ ...f, value: f.default, custom: false }))
@@ -190,6 +211,7 @@ export default function NewPaper() {
         distribution: { information: info, concept, application },
         format_distribution: fmtPayload,
         custom_instructions: customInstructions.trim() || null,
+        section_blueprint: sectionBlueprint.trim() || null,
       });
       toast.success("Generation started — opening paper…");
       navigate(`/papers/${data.id}`);
@@ -474,6 +496,60 @@ export default function NewPaper() {
               </div>
             </div>
 
+            <div className="qp-card" data-testid="blueprint-card">
+              <div className="overline mb-2">// PAPER BLUEPRINT (OPTIONAL)</div>
+              <p className="text-xs text-neutral-500 font-mono mb-3">
+                Paste your board&rsquo;s exact section pattern. When set, this
+                <b> overrides </b> the Question Distribution and Format Mix
+                above &mdash; the AI follows the blueprint verbatim. Useful for
+                ICSE / CBSE / IGCSE / state-board templates.
+              </p>
+              <div className="flex flex-wrap gap-2 mb-3">
+                <button
+                  type="button"
+                  onClick={() => setSectionBlueprint(ICSE_CLASS_10_BLUEPRINT)}
+                  className="qp-btn qp-btn-secondary text-xs"
+                  data-testid="blueprint-preset-icse"
+                >
+                  Use ICSE Class 10 (80m / 2h)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSectionBlueprint(CBSE_CLASS_10_BLUEPRINT)}
+                  className="qp-btn qp-btn-secondary text-xs"
+                  data-testid="blueprint-preset-cbse"
+                >
+                  Use CBSE Class 10 (80m / 3h)
+                </button>
+                {sectionBlueprint && (
+                  <button
+                    type="button"
+                    onClick={() => setSectionBlueprint("")}
+                    className="qp-btn qp-btn-secondary text-xs"
+                    data-testid="blueprint-clear"
+                  >
+                    <XIcon size={12} weight="bold" /> Clear
+                  </button>
+                )}
+              </div>
+              <textarea
+                value={sectionBlueprint}
+                onChange={(e) => setSectionBlueprint(e.target.value)}
+                rows={8}
+                className="qp-input font-mono text-xs"
+                placeholder={`Example:
+Section A (40 marks, compulsory)
+- Q1: 15 MCQs x 1 mark each (multiple-choice with 4 options)
+- Q2: 6 fill-in-the-blanks x 1 mark each
+- Q3: 4 short-answer parts (a)-(d), 19 marks total
+
+Section B (40 marks) - Attempt any FOUR of the following SIX questions
+- Q4-Q9: 10 marks each, sub-divided into parts (a) 3m + (b) 3m + (c) 4m`}
+                spellCheck={false}
+                data-testid="blueprint-input"
+              />
+            </div>
+
             <div className="qp-card" data-testid="custom-instructions-card">
               <div className="overline mb-2">
                 // ADDITIONAL INSTRUCTIONS FOR THE AI
@@ -493,6 +569,7 @@ export default function NewPaper() {
                 rows={4}
                 className="qp-input font-mono text-sm"
                 placeholder="Type extra instructions for the question paper engine here..."
+                spellCheck={false}
                 data-testid="custom-instructions-input"
               />
             </div>

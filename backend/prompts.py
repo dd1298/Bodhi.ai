@@ -51,6 +51,7 @@ def qgen_prompt(
     feedback_hints: str = "",
     format_distribution: dict | None = None,
     custom_instructions: str = "",
+    section_blueprint: str = "",
 ) -> str:
     target_q = max(5, min(25, total_marks // 3))
     info_n = round(target_q * distribution.get("information", 0) / 100)
@@ -77,6 +78,8 @@ def qgen_prompt(
             f"- {t['name']}  (weight {w}, target ~{share} question{'s' if share != 1 else ''})"
         )
     topics_block = "\n".join(topic_lines)
+
+    has_blueprint = bool(section_blueprint and section_blueprint.strip())
 
     # Optional question-format mix (MCQ / Short Answer / Long Answer / etc).
     format_block = ""
@@ -110,17 +113,41 @@ def qgen_prompt(
             f"{custom_instructions.strip()}\n\n"
         )
 
+    blueprint_block = ""
+    if has_blueprint:
+        blueprint_block = (
+            "PAPER BLUEPRINT (HIGHEST PRIORITY — overrides any default section / type "
+            "split). Reproduce sections, question counts, marks, internal-choice rules, "
+            "and per-question formats EXACTLY as described below. Use the section "
+            "TITLES verbatim as the LLM 'sections[].title' values. If the blueprint "
+            "specifies internal choice (e.g. 'attempt any 4 of 6'), generate ALL the "
+            "alternatives shown (e.g. 6 questions for a 4-of-6 section) and reflect the "
+            "rule in the section's title (e.g. 'Section B (40 Marks) — Attempt any "
+            "FOUR of the following SIX questions').\n\n"
+            f"{section_blueprint.strip()}\n\n"
+        )
+
+    # Default Bloom-based section split — only used when no blueprint is given.
+    default_section_block = "" if has_blueprint else (
+        f"Target question counts: information={info_n}, concept={concept_n}, application={app_n}.\n\n"
+        f"Question type definitions:\n{guide}\n\n"
+    )
+    marks_rule = (
+        "" if has_blueprint else
+        "Marks allocation: assign 1-2 marks for information, 3-4 for concept, 5-6 for application, "
+        "ensuring the sum equals the total marks as closely as possible.\n\n"
+    )
+
     return (
         f"Generate an ORIGINAL question paper for Class {klass} - {subject}.\n"
         f"Topics to cover (with weightage — heavier topics get more questions):\n"
         f"{topics_block}\n\n"
         f"Overall difficulty: {difficulty}\n"
-        f"Total marks: {total_marks}, Duration: {duration} minutes.\n"
-        f"Target question counts: information={info_n}, concept={concept_n}, application={app_n}.\n\n"
-        f"Question type definitions:\n{guide}\n\n"
+        f"Total marks: {total_marks}, Duration: {duration} minutes.\n\n"
+        f"{blueprint_block}"
+        f"{default_section_block}"
         f"{format_block}"
-        "Marks allocation: assign 1-2 marks for information, 3-4 for concept, 5-6 for application, "
-        "ensuring the sum equals the total marks as closely as possible.\n\n"
+        f"{marks_rule}"
         "TOPIC COVERAGE RULE (mandatory):\n"
         "- Distribute questions across ALL listed topics in proportion to their weights.\n"
         "- No single topic should exceed its target by more than 1 question.\n"
