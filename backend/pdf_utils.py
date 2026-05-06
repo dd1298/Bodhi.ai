@@ -182,11 +182,63 @@ def _make_diagram_image(img_bytes: bytes, max_width_mm: float = 100, max_height_
         return Image(io.BytesIO(img_bytes), width=max_width_mm * mm, height=max_height_mm * mm * 0.75)
 
 
+def _markdown_to_reportlab(text: str) -> str:
+    """Strip / convert common markdown formatting that LLMs sometimes emit
+    so it doesn't leak into the rendered PDF as raw asterisks/backticks.
+
+    Runs BEFORE math segmentation so the math segments themselves are not
+    affected (they're between $...$ delimiters anyway).
+    """
+    if not text:
+        return text
+    # Strip a leading "Q1." / "Q1)" / "**Q1.**" / "1." / "1)" from the LLM
+    # output FIRST (before sentinelizing) — the renderer always adds its
+    # own "Qx." prefix so this would otherwise double up.
+    text = re.sub(
+        r"^\s*\*{0,2}\s*Q\s*\d+\s*[.)]\s*\*{0,2}\s*",
+        "",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    # **bold**  -> sentinels (placeholder strings to survive escaping)
+    # We can't insert ReportLab <b>...</b> tags directly here because the
+    # downstream code escapes "<" / ">". Instead, we use a unique sentinel
+    # that the post-escape stage swaps in for real tags.
+    text = re.sub(r"\*\*(.+?)\*\*", "\x01B_OPEN\x01\\1\x01B_CLOSE\x01", text, flags=re.DOTALL)
+    # *italic* -> <i>italic</i>  (must NOT eat the leading * of a bullet line)
+    text = re.sub(
+        r"(?<![*\w])\*(?!\s)([^\*\n]+?)(?<!\s)\*(?![*\w])",
+        "\x01I_OPEN\x01\\1\x01I_CLOSE\x01",
+        text,
+    )
+    # `inline code` -> drop backticks (we'd render in mono but ReportLab Paragraph
+    # doesn't have a mono tag by default; just strip the markers).
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+    # Stray heading markers at line starts (#, ##, ###) -> drop the marker
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    return text
+
+
+def _apply_format_sentinels(escaped_html: str) -> str:
+    """Swap markdown sentinels for real ReportLab tags AFTER escape pass."""
+    return (
+        escaped_html.replace("\x01B_OPEN\x01", "<b>")
+        .replace("\x01B_CLOSE\x01", "</b>")
+        .replace("\x01I_OPEN\x01", "<i>")
+        .replace("\x01I_CLOSE\x01", "</i>")
+    )
+
+
 def _math_to_paragraph_html(text: str) -> str:
     """Convert a string with LaTeX delimiters ($...$ and $$...$$) into a
     ReportLab Paragraph-compatible HTML string with inline math images."""
     if not text:
         return ""
+    # Convert markdown emphasis to sentinels BEFORE math segmentation, so
+    # the math content itself (which is rendered as PNG and never goes
+    # through escape) is not affected.
+    text = _markdown_to_reportlab(text)
     # Escape ReportLab/Paragraph special characters first, BUT preserve $ markers
     # by extracting math segments before escaping.
     segments: list = []  # list of ("text"|"math", value)
@@ -244,7 +296,7 @@ def _math_to_paragraph_html(text: str) -> str:
                 out_parts.append(
                     friendly.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 )
-    return "".join(out_parts)
+    return _apply_format_sentinels("".join(out_parts))
 
 
 def _strip_boilerplate(text: str) -> str:

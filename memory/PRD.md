@@ -56,6 +56,15 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Validation that no generated question matches textbook content (similarity check)
 - Admin dashboard & seed admin flow
 
+## What's Implemented — 2026-05-06 (Markdown leak fix in PDFs)
+- **Stripped LLM markdown from PDF output**: LLM was emitting `**Q1.**`, `**1.**`, `**(i)**` (markdown bold) which leaked into the PDF as literal asterisks. Added `_markdown_to_reportlab` preprocessor in `pdf_utils.py`:
+  - `**bold**` → `<b>bold</b>` (renders bold instead of asterisks)
+  - `*italic*` → `<i>italic</i>`
+  - Backticks / `#` headings stripped
+  - Leading `Q1.` / `**Q1.**` / `1.` prefixes stripped (renderer adds its own numbering, was producing duplicates like `Q1. Q1.`)
+- **Updated `qgen_prompt`** with explicit "do NOT use markdown formatting" rule + "do NOT prefix questions with 'Q1.'" rule so future generations are clean at the source.
+- **Verified** by re-rendering the user's reported "Physics ICSE class 10 paper" PDF: markdown asterisks gone, math (`5 N·m`, `45°`, `kg m s⁻¹`, `9.8 m/s²`) all render correctly via the existing matplotlib LaTeX→PNG pipeline. The "blank MCQ options" the AI image analyzer reported earlier were a false positive — those are inline math PNG images that `pdftotext` can't see, but they ARE present and rendering correctly.
+
 ## What's Implemented — 2026-05-06 (LLM resilience + Retry button)
 - **Smart retry layer** in `llm_adapter.py`:
   - Disabled the OpenAI SDK's slow internal retries (which caused 60s+ stalls per attempt) by passing `num_retries=0` via LiteLLM and wrapping each call in `asyncio.wait_for(timeout=75s)` so transient 502s fail fast.

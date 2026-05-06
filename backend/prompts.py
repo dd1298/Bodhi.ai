@@ -193,6 +193,10 @@ def qgen_prompt(
         "- Set 'format' field on every question (use one of the provided format labels, or empty string if none specified).\n"
         "- Ensure sum of marks of all questions equals the total marks.\n"
         "- At most 5 questions in the entire paper should have needs_diagram=true.\n"
+        "- Do NOT use markdown formatting in any field. No '**bold**', no '*italic*', "
+        "no '#' headings, no backticks, no bullet '-' or '*' markers at the start of "
+        "lines. Use plain prose. Question numbering is added by the renderer; do NOT "
+        "prefix questions with 'Q1.', '1.', '(i)' or similar yourself.\n"
         "- No prose outside the JSON.\n\n"
         f"=== TEXTBOOK CONTEXT (style & scope only, DO NOT COPY) ===\n{context_excerpt}\n=== END ==="
     )
