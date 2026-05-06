@@ -437,6 +437,7 @@ export default function SolutionView() {
                               rows={Math.max(3, Math.min(12,
                                 Math.ceil((draft.sections[si].answers[aIdx].answer || "").length / 80) + 1
                               ))}
+                              spellCheck={false}
                               data-testid={`edit-answer-${q.id}`}
                             />
                           ) : (

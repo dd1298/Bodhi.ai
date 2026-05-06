@@ -363,6 +363,7 @@ export default function PaperView() {
                   setDraft({ ...draft, title: e.target.value })
                 }
                 className="qp-input text-center font-display text-3xl md:text-4xl"
+                spellCheck={false}
                 data-testid="edit-title-input"
               />
             ) : (
@@ -422,6 +423,7 @@ export default function PaperView() {
               className="qp-input w-full mb-6"
               rows={2}
               placeholder="Instructions (e.g., attempt all questions)"
+              spellCheck={false}
               data-testid="edit-instructions-input"
             />
           ) : (
@@ -457,6 +459,7 @@ export default function PaperView() {
                             }
                             className="qp-input flex-1"
                             rows={2}
+                            spellCheck={false}
                             data-testid={`edit-q-text-${q.id}`}
                           />
                           <button
