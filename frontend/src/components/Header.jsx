@@ -55,6 +55,9 @@ export default function Header() {
           <NavItem to="/textbooks" label="Textbooks" testid="nav-textbooks" />
           <NavItem to="/papers/new" label="New Paper" testid="nav-new-paper" />
           <NavItem to="/qbank" label="Question Bank" testid="nav-qbank" />
+          {user?.role === "admin" && (
+            <NavItem to="/admin" label="Admin" testid="nav-admin" />
+          )}
         </nav>
 
         <div className="flex items-center gap-3">

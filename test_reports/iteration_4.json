@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration 4: Admin Dashboard P1. Backend 18/18 pytest passes (seed, overview, users, textbooks, papers, share toggle idempotent, shared-book visibility/ownership flags, cross-teacher generate with shared book, unshare revokes access, teacher cannot self-share at upload, admin upload is_shared=true honored, admin reindex+delete on non-owned book). Frontend smoke green: admin login, nav-admin, /admin page, all 5 stat cards (stat-teachers/stat-textbooks/stat-shared/stat-papers/stat-pending) and 5 tabs (admin-tab-library/admin-tab-textbooks/admin-tab-papers/admin-tab-users/admin-tab-upload) present, admin-toggle-share-{id} persists after reload (UNSHARE->SHARE), bulk-drop-zone+bulk-upload-start present, teacher does NOT see nav-admin and /admin redirects to /.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "tests_executed": {
+    "TestAdminSeed::test_admin_login_role": "PASS",
+    "TestAdminOverview::test_overview_returns_counts": "PASS",
+    "TestAdminOverview::test_overview_teacher_403": "PASS",
+    "TestAdminUsers::test_users_list_no_password_hash": "PASS (password_hash NOT leaked)",
+    "TestAdminUsers::test_users_teacher_403": "PASS",
+    "TestAdminTextbooks::test_textbooks_lists_all": "PASS (owner_email+is_shared present)",
+    "TestAdminTextbooks::test_textbooks_teacher_403": "PASS",
+    "TestAdminPapers::test_papers_lists_all_with_owner": "PASS",
+    "TestAdminPapers::test_papers_teacher_403": "PASS",
+    "TestShareTextbook::test_teacher_cannot_see_admin_book_before_share": "PASS (list excludes + GET 403)",
+    "TestShareTextbook::test_admin_share_toggle_idempotent": "PASS (double-apply safe)",
+    "TestShareTextbook::test_share_non_admin_403": "PASS",
+    "TestShareTextbook::test_teacher_sees_shared_book_readonly": "PASS (is_shared=true, is_owned=false, GET 200)",
+    "TestShareTextbook::test_teacher_generate_with_shared_book": "PASS (generate 200)",
+    "TestShareTextbook::test_unshare_blocks_generate": "PASS (after unshare, generate 403/404)",
+    "TestUploadIsSharedFlag::test_teacher_cannot_self_share_upload": "PASS (is_shared stays false for teacher)",
+    "TestUploadIsSharedFlag::test_admin_upload_is_shared_true": "PASS",
+    "TestAdminManageNonOwned::test_admin_reindex_teacher_book": "PASS (admin reindex+delete non-owned 200)"
+  },
+  "frontend_smoke_passed": {
+    "admin_login": "admin@bodhi.ai / admin123 -> redirected to /",
+    "header_nav_admin": "[data-testid=nav-admin] visible for admin only",
+    "admin_page": "/admin renders [data-testid=admin-page]",
+    "stat_cards": "stat-teachers=12, stat-textbooks=34, stat-shared, stat-papers=53, stat-pending=0 all visible",
+    "tabs": "admin-tab-library, admin-tab-textbooks, admin-tab-papers, admin-tab-users, admin-tab-upload all present and clickable",
+    "share_toggle": "admin-toggle-share-{id} flipped UNSHARE->SHARE; persisted across page reload",
+    "bulk_upload_ui": "[data-testid=bulk-drop-zone] and [data-testid=bulk-upload-start] present; subject+class inputs present; admin-upload-with-share E2E already covered by backend test",
+    "teacher_guard": "pdftest@t.com: nav-admin NOT rendered; direct /admin redirects to /"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_dashboard.py",
+    "/app/test_reports/pytest/admin_dashboard.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "INFO: /api/admin/users returns the full user doc minus password_hash. It is stripped correctly but consider whitelisting fields explicitly rather than blacklisting, to prevent accidental leakage of future sensitive fields.",
+    "INFO: /api/admin/textbooks does per-row Python aggregation (OK for <=500 books). If the school scales past a few thousand books, switch to a Mongo $lookup aggregation.",
+    "INFO: PATCH /api/admin/textbooks/{id}/share uses a query-string bool via FastAPI Query; FastAPI parses 'true'/'false' correctly, but a JSON body would be slightly more REST-idiomatic. Not a bug.",
+    "MINOR: server.py is now ~1789 lines. At this size consider splitting admin endpoints into /app/backend/admin_routes.py for maintainability (per 700-line guideline)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_admin_dashboard.py"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100%"},
+  "test_credentials": "Admin: admin@bodhi.ai / admin123 (auto-seeded). Teacher: pdftest@t.com / pass123.",
+  "seed_data_creation": "Backend tests create several TEST_* textbooks for the admin + teacher (shared-scenario book, teacher-try-share, admin-upload-shared, teacher_owned reindex/delete target). TEST_admin_shared.pdf is left unshared at end-of-run (unshare test flips it back). A few TEST_* papers are left in DB from generate checks.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Admin suite at /app/backend/tests/test_admin_dashboard.py. Run with REACT_APP_BACKEND_URL=https://question-ai-10.preview.emergentagent.com. Do not re-seed admin; startup hook is idempotent. The share toggle button data-testid is `admin-toggle-share-{textbook_id}` and its inner text is either SHARE or UNSHARE — use that to assert current state. Teacher route guard is correctly redirecting /admin -> /.",
+  "rca_of_the_issue": "No bugs found. All 18 backend tests and the frontend smoke checklist for the admin dashboard passed on the first run."
+}

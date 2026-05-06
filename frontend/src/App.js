@@ -13,6 +13,8 @@ import NewPaper from "@/pages/NewPaper";
 import PaperView from "@/pages/PaperView";
 import SolutionView from "@/pages/SolutionView";
 import QBank from "@/pages/QBank";
+import Admin from "@/pages/Admin";
+import AdminRoute from "@/components/AdminRoute";
 
 function App() {
   return (
@@ -80,6 +82,14 @@ function App() {
                 <ProtectedRoute>
                   <QBank />
                 </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <AdminRoute>
+                  <Admin />
+                </AdminRoute>
               }
             />
           </Routes>

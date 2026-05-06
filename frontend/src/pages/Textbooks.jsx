@@ -227,6 +227,14 @@ export default function Textbooks() {
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-1">
+                          {tb.is_shared && (
+                            <span
+                              className="qp-badge qp-badge-yellow"
+                              data-testid={`shared-badge-${tb.id}`}
+                            >
+                              shared library
+                            </span>
+                          )}
                           <span
                             className={`qp-badge ${
                               tb.status === "topics_ready"
@@ -248,8 +256,9 @@ export default function Textbooks() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => extractTopics(tb.id)}
-                          disabled={extractingId === tb.id}
+                          disabled={extractingId === tb.id || tb.is_owned === false}
                           className="qp-btn qp-btn-secondary text-xs"
+                          title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`extract-topics-${tb.id}`}
                         >
                           <Sparkle size={14} weight="bold" />
@@ -261,8 +270,10 @@ export default function Textbooks() {
                         </button>
                         <button
                           onClick={() => deleteTextbook(tb.id)}
+                          disabled={tb.is_owned === false}
                           className="qp-btn qp-btn-secondary text-xs"
                           aria-label="Delete textbook"
+                          title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`delete-textbook-${tb.id}`}
                         >
                           <Trash size={14} weight="bold" />

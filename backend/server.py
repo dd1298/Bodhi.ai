@@ -199,6 +199,27 @@ async def startup():
     except Exception as e:  # noqa: BLE001
         logger.warning(f"index create: {e}")
 
+    # Seed default admin account if missing. Idempotent — never overwrites
+    # an existing admin (so password rotation is the operator's job).
+    try:
+        admin_email = "admin@bodhi.ai"
+        existing_admin = await db.users.find_one({"email": admin_email})
+        if not existing_admin:
+            admin_id = str(uuid.uuid4())
+            await db.users.insert_one(
+                {
+                    "id": admin_id,
+                    "email": admin_email,
+                    "full_name": "Bodhi.ai Admin",
+                    "role": "admin",
+                    "password_hash": hash_password("admin123"),
+                    "created_at": utcnow_iso(),
+                }
+            )
+            logger.info(f"Seeded default admin: {admin_email}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"admin seed failed: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -254,6 +275,7 @@ async def upload_textbook(
     file: UploadFile = File(...),
     subject: str = Query(...),
     class_name: str = Query(...),
+    is_shared: bool = Query(False),
     user: dict = Depends(get_current_user),
 ):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -264,6 +286,10 @@ async def upload_textbook(
         raise HTTPException(status_code=400, detail="Empty file")
     if len(data) > 500 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 500MB)")
+
+    # Only admins can mark a book as shared at upload time. Teachers always
+    # upload private books.
+    shared_flag = bool(is_shared) and user["role"] == "admin"
 
     textbook_id = str(uuid.uuid4())
     path = f"{APP_NAME}/textbooks/{user['id']}/{textbook_id}.pdf"
@@ -288,6 +314,7 @@ async def upload_textbook(
         "chunk_count": len(chunks),
         "chunks": chunks[:50],  # cap for POC
         "topics": [],
+        "is_shared": shared_flag,
         "created_at": utcnow_iso(),
         "is_deleted": False,
     }
@@ -298,16 +325,27 @@ async def upload_textbook(
         "status": doc["status"],
         "chunk_count": doc["chunk_count"],
         "original_filename": file.filename,
+        "is_shared": shared_flag,
     }
 
 
 @api_router.get("/textbooks")
 async def list_textbooks(user: dict = Depends(get_current_user)):
-    query = {"is_deleted": False}
-    if user["role"] != "admin":
-        query["owner_id"] = user["id"]
+    if user["role"] == "admin":
+        # Admins see everything.
+        query: dict = {"is_deleted": False}
+    else:
+        # Teachers see their own books + the shared library books uploaded
+        # by any admin.
+        query = {
+            "is_deleted": False,
+            "$or": [
+                {"owner_id": user["id"]},
+                {"is_shared": True},
+            ],
+        }
     items = (
-        await db.textbooks.find(query, {"_id": 0, "chunks": 0}).sort("created_at", -1).to_list(200)
+        await db.textbooks.find(query, {"_id": 0, "chunks": 0}).sort("created_at", -1).to_list(500)
     )
     return [
         {
@@ -317,6 +355,8 @@ async def list_textbooks(user: dict = Depends(get_current_user)):
             "class_name": t["class_name"],
             "status": t["status"],
             "topic_count": len(t.get("topics", [])),
+            "is_shared": t.get("is_shared", False),
+            "is_owned": t["owner_id"] == user["id"],
             "created_at": t["created_at"],
         }
         for t in items
@@ -411,7 +451,11 @@ async def get_textbook(textbook_id: str, user: dict = Depends(get_current_user))
     )
     if not tb:
         raise HTTPException(status_code=404, detail="Textbook not found")
-    if tb["owner_id"] != user["id"] and user["role"] != "admin":
+    if (
+        tb["owner_id"] != user["id"]
+        and user["role"] != "admin"
+        and not tb.get("is_shared")
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
     return tb
 
@@ -530,7 +574,11 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         )
         if not tb:
             raise HTTPException(status_code=404, detail=f"Textbook {tid} not found")
-        if tb["owner_id"] != user["id"] and user["role"] != "admin":
+        if (
+            tb["owner_id"] != user["id"]
+            and user["role"] != "admin"
+            and not tb.get("is_shared")
+        ):
             raise HTTPException(status_code=403, detail="Forbidden")
         textbooks.append(tb)
 
@@ -1588,6 +1636,138 @@ async def upload_qpaper(
         "filename": file.filename,
         "questions": saved_docs[:100],
     }
+
+
+def _require_admin(user: dict) -> None:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+# =========================================================
+# Admin Dashboard
+# =========================================================
+@api_router.get("/admin/overview")
+async def admin_overview(user: dict = Depends(get_current_user)):
+    _require_admin(user)
+    teachers = await db.users.count_documents({"role": "teacher"})
+    admins = await db.users.count_documents({"role": "admin"})
+    textbooks_total = await db.textbooks.count_documents({"is_deleted": False})
+    textbooks_shared = await db.textbooks.count_documents(
+        {"is_deleted": False, "is_shared": True}
+    )
+    papers_total = await db.papers.count_documents({"is_deleted": False})
+    papers_pending = await db.papers.count_documents(
+        {"is_deleted": False, "generation_status": "pending"}
+    )
+    papers_failed = await db.papers.count_documents(
+        {"is_deleted": False, "generation_status": "failed"}
+    )
+    return {
+        "teachers": teachers,
+        "admins": admins,
+        "textbooks_total": textbooks_total,
+        "textbooks_shared": textbooks_shared,
+        "papers_total": papers_total,
+        "papers_pending": papers_pending,
+        "papers_failed": papers_failed,
+    }
+
+
+@api_router.get("/admin/users")
+async def admin_users(user: dict = Depends(get_current_user)):
+    _require_admin(user)
+    users = await db.users.find(
+        {}, {"_id": 0, "password_hash": 0}
+    ).sort("created_at", -1).to_list(500)
+    # Attach per-user counts
+    out = []
+    for u in users:
+        tb_count = await db.textbooks.count_documents(
+            {"is_deleted": False, "owner_id": u["id"]}
+        )
+        paper_count = await db.papers.count_documents(
+            {"is_deleted": False, "owner_id": u["id"]}
+        )
+        out.append({**u, "textbook_count": tb_count, "paper_count": paper_count})
+    return out
+
+
+@api_router.get("/admin/textbooks")
+async def admin_textbooks(user: dict = Depends(get_current_user)):
+    _require_admin(user)
+    tbs = await db.textbooks.find(
+        {"is_deleted": False}, {"_id": 0, "chunks": 0}
+    ).sort("created_at", -1).to_list(500)
+    # Look up owner emails in one pass
+    owner_ids = list({t["owner_id"] for t in tbs})
+    owners = await db.users.find(
+        {"id": {"$in": owner_ids}}, {"_id": 0, "id": 1, "email": 1, "role": 1}
+    ).to_list(len(owner_ids))
+    by_id = {o["id"]: o for o in owners}
+    out = []
+    for t in tbs:
+        owner = by_id.get(t["owner_id"], {})
+        out.append({
+            "id": t["id"],
+            "original_filename": t["original_filename"],
+            "subject": t["subject"],
+            "class_name": t["class_name"],
+            "status": t["status"],
+            "topic_count": len(t.get("topics", [])),
+            "chunk_count": t.get("chunk_count", 0),
+            "is_shared": t.get("is_shared", False),
+            "created_at": t["created_at"],
+            "owner_id": t["owner_id"],
+            "owner_email": owner.get("email", ""),
+            "owner_role": owner.get("role", ""),
+        })
+    return out
+
+
+@api_router.patch("/admin/textbooks/{textbook_id}/share")
+async def admin_set_textbook_shared(
+    textbook_id: str,
+    is_shared: bool = Query(...),
+    user: dict = Depends(get_current_user),
+):
+    _require_admin(user)
+    tb = await db.textbooks.find_one(
+        {"id": textbook_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not tb:
+        raise HTTPException(status_code=404, detail="Textbook not found")
+    await db.textbooks.update_one(
+        {"id": textbook_id}, {"$set": {"is_shared": bool(is_shared)}}
+    )
+    return {"id": textbook_id, "is_shared": bool(is_shared)}
+
+
+@api_router.get("/admin/papers")
+async def admin_papers(user: dict = Depends(get_current_user)):
+    _require_admin(user)
+    papers = await db.papers.find(
+        {"is_deleted": False},
+        {"_id": 0, "sections": 0, "topics": 0, "chunks": 0},
+    ).sort("created_at", -1).to_list(500)
+    owner_ids = list({p["owner_id"] for p in papers})
+    owners = await db.users.find(
+        {"id": {"$in": owner_ids}}, {"_id": 0, "id": 1, "email": 1}
+    ).to_list(len(owner_ids))
+    by_id = {o["id"]: o["email"] for o in owners}
+    return [
+        {
+            "id": p["id"],
+            "title": p.get("title", ""),
+            "subject": p.get("subject", ""),
+            "class_name": p.get("class_name", ""),
+            "total_marks": p.get("total_marks", 0),
+            "generation_status": p.get("generation_status", "ready"),
+            "created_at": p.get("created_at", ""),
+            "owner_id": p["owner_id"],
+            "owner_email": by_id.get(p["owner_id"], ""),
+        }
+        for p in papers
+    ]
 
 
 # =========================================================
