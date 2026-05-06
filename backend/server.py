@@ -733,6 +733,72 @@ async def delete_paper(paper_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
+@api_router.post("/papers/{paper_id}/regenerate")
+async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)):
+    """Re-trigger background generation for an existing paper that previously
+    failed (or that the teacher just wants a different draft of). Reuses the
+    paper's stored topics, blueprint, format mix, and custom instructions."""
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if p.get("generation_status") == "pending":
+        raise HTTPException(status_code=409, detail="Generation already in progress")
+
+    tb_ids = p.get("textbook_ids") or (
+        [p["textbook_id"]] if p.get("textbook_id") else []
+    )
+    merged_chunks: list = []
+    max_per = max(2, 8 // max(1, len(tb_ids)))
+    for tid in tb_ids:
+        tb = await db.textbooks.find_one(
+            {"id": tid, "is_deleted": False}, {"_id": 0}
+        )
+        if tb:
+            merged_chunks.extend((tb.get("chunks") or [])[:max_per])
+    context_excerpt = "\n\n".join(merged_chunks)[:10000]
+
+    feedback_hints = await load_paper_feedback_hints(
+        user["id"], p.get("subject", ""), p.get("class_name", "")
+    )
+
+    # Reset status so the UI shows "Generating…" again
+    await db.papers.update_one(
+        {"id": paper_id},
+        {"$set": {
+            "generation_status": "pending",
+            "generation_error": None,
+            "sections": [],
+            "diagrams_pending": 0,
+        }},
+    )
+
+    import asyncio as _asyncio
+
+    _asyncio.create_task(
+        generate_paper_background(
+            paper_id=paper_id,
+            owner_id=p["owner_id"],
+            subject=p.get("subject", ""),
+            klass=p.get("class_name", ""),
+            topics_weighted=p.get("topics", []),
+            difficulty=p.get("difficulty", "medium"),
+            distribution=p.get("distribution", {}),
+            total_marks=p.get("total_marks", 50),
+            duration_minutes=p.get("duration_minutes", 60),
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+            format_distribution=p.get("format_distribution") or {},
+            custom_instructions=p.get("custom_instructions", "") or "",
+            section_blueprint=p.get("section_blueprint", "") or "",
+        )
+    )
+    return {"id": paper_id, "generation_status": "pending"}
+
+
 @api_router.get("/papers/{paper_id}/pdf")
 async def paper_pdf(
     paper_id: str,

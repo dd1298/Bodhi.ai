@@ -56,6 +56,16 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Validation that no generated question matches textbook content (similarity check)
 - Admin dashboard & seed admin flow
 
+## What's Implemented — 2026-05-06 (LLM resilience + Retry button)
+- **Smart retry layer** in `llm_adapter.py`:
+  - Disabled the OpenAI SDK's slow internal retries (which caused 60s+ stalls per attempt) by passing `num_retries=0` via LiteLLM and wrapping each call in `asyncio.wait_for(timeout=75s)` so transient 502s fail fast.
+  - Added classified retries: 3 attempts per provider with 2s/4s/8s backoff, but ONLY on transient errors (502/503/504/timeout/rate-limit). Auth/budget/malformed errors fail fast and we move to the fallback Claude provider.
+  - Result: a single failed call now resolves in ≤75s instead of stalling the worker for 12+ minutes.
+- **Retry generation button** on the failed-paper page (`PaperView.jsx`):
+  - New `POST /api/papers/{id}/regenerate` endpoint reuses the paper's stored topics, blueprint, format mix, and custom instructions; resets status to `pending` and re-kicks the background generation task.
+  - UI detects transient-looking error messages (502/timeout/gateway/overloaded) and shows a friendly "upstream LLM gateway is having a hiccup" hint with the **Retry generation** button.
+  - Verified: a paper that failed with a 502 was successfully regenerated in <30s after the retry layer was in place.
+
 ## What's Implemented — 2026-05-06 (Backend refactor + Blueprint regression)
 - **Backend modularised**: `server.py` reduced from **1798 → 1229 lines** (32% smaller). New modules:
   - `/app/backend/deps.py` (39 lines) — shared `app`, `api_router`, `db`, `client`, `logger`, `utcnow_iso`, `require_admin`. Loads `.env` so JWT/LLM/storage keys are available before any other module imports.

@@ -16,6 +16,7 @@ import {
   X,
   Image as ImageIcon,
   CheckCircle,
+  ArrowClockwise,
 } from "@phosphor-icons/react";
 import MathText from "@/components/MathText";
 
@@ -244,6 +245,21 @@ export default function PaperView() {
   }
 
   if (paper.generation_status === "failed") {
+    const errMsg =
+      paper.generation_error ||
+      "The AI could not complete this paper. This is often a temporary LLM provider issue.";
+    const looksTransient = /502|503|504|gateway|timeout|connection|overloaded/i.test(
+      errMsg
+    );
+    const retry = async () => {
+      try {
+        await api.post(`/papers/${id}/regenerate`);
+        toast.success("Retrying — the AI is drafting questions again");
+        await load();
+      } catch (err) {
+        toast.error(err?.response?.data?.detail || "Could not retry");
+      }
+    };
     return (
       <div className="min-h-screen bg-[#FAFAFA]">
         <Header />
@@ -265,14 +281,33 @@ export default function PaperView() {
             <h1 className="text-2xl font-semibold text-red-900 mb-2">
               Generation failed
             </h1>
-            <p className="text-red-800 mb-4">
-              {paper.generation_error ||
-                "The AI could not complete this paper. This is often a temporary LLM budget or rate-limit issue."}
+            <p className="text-red-800 mb-2 text-sm font-mono break-words">
+              {errMsg}
             </p>
-            <p className="text-sm text-red-700">
-              Try generating again in a minute, or contact your admin if the
-              issue persists.
-            </p>
+            {looksTransient && (
+              <p className="text-sm text-red-700 mb-5">
+                The upstream LLM gateway is having a hiccup (502/timeout). Click
+                <b> Retry generation </b>below — the request will reuse your
+                blueprint, topics and settings. If retries keep failing for
+                several minutes, please wait a bit and try again.
+              </p>
+            )}
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={retry}
+                className="qp-btn qp-btn-primary"
+                data-testid="paper-retry-btn"
+              >
+                <ArrowClockwise size={16} weight="bold" /> Retry generation
+              </button>
+              <Link
+                to="/papers/new"
+                className="qp-btn qp-btn-secondary"
+                data-testid="paper-new-from-failed"
+              >
+                Start a new paper
+              </Link>
+            </div>
           </div>
         </main>
       </div>

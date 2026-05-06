@@ -1,4 +1,5 @@
 """LLM adapter with OpenAI primary + Claude fallback using Emergent Universal key."""
+import asyncio
 import os
 import json
 import logging
@@ -7,7 +8,12 @@ import uuid
 import base64
 from typing import Any
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+# Disable OpenAI SDK's internal retry-with-60s-backoff so litellm errors
+# bubble up to our adapter immediately (we have our own retry layer below
+# that's faster and aware of which errors are transient).
+os.environ.setdefault("OPENAI_MAX_RETRIES", "0")
+
+from emergentintegrations.llm.chat import LlmChat, UserMessage  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -20,30 +26,116 @@ PROVIDER_CHAIN = [
 
 DIAGRAM_MODEL = "gemini-3.1-flash-image-preview"
 
+# Exponential backoff settings for transient upstream errors.
+# We disable litellm's internal retries (num_retries=0) and use these for
+# our smart retry layer instead. Each call fails within ~60s so 3 attempts
+# × 2 providers worst-case = ~6 minutes (vs ~12-16 mins with internal retries).
+RETRY_MAX_ATTEMPTS = 3  # per provider
+RETRY_BASE_DELAY_SEC = 2.0
+RETRY_BACKOFF = 2.0  # 2s, 4s, 8s
+
+
+# Substrings that mark a TRANSIENT upstream error worth retrying. Anything
+# else (auth, budget, content-policy, malformed request) fails fast so we
+# move to the next provider quickly.
+_TRANSIENT_MARKERS = (
+    "502",
+    "503",
+    "504",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "timed out",
+    "timeout",
+    "connection error",
+    "connection reset",
+    "internal server error",
+    "remote disconnected",
+    "rate limit",
+    "rate_limit",
+    "429",
+    "overloaded",
+)
+
+
+def _is_transient(err: BaseException) -> bool:
+    msg = str(err).lower()
+    return any(marker in msg for marker in _TRANSIENT_MARKERS)
+
 
 async def chat_complete(system_message: str, user_text: str) -> str:
-    """Run chat completion with fallback through provider chain.
+    """Run chat completion with retries-per-provider then fall through.
 
-    Raises RuntimeError if all providers fail.
+    For each provider in PROVIDER_CHAIN we retry up to RETRY_MAX_ATTEMPTS
+    times on TRANSIENT upstream errors (502/503/504/timeout/rate-limit) with
+    exponential backoff. Non-transient errors (auth, budget, malformed) fail
+    fast and we move to the next provider.
+
+    We wrap each attempt in `asyncio.wait_for(timeout=PER_CALL_TIMEOUT)` so
+    that even if the OpenAI SDK is doing its own internal 60s-each retries
+    on a 502, our outer call aborts on time and we move on. This is essential
+    when the upstream LLM gateway is misbehaving — without it a single failed
+    generation can take 12+ minutes and saturate the asyncio worker.
     """
+    PER_CALL_TIMEOUT = 75.0  # seconds — covers 1 LiteLLM call + small slack
     last_err: Exception | None = None
     for provider, model in PROVIDER_CHAIN:
-        try:
-            session_id = f"qpgen-{uuid.uuid4()}"
-            chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=session_id,
-                system_message=system_message,
-            ).with_model(provider, model)
-            msg = UserMessage(text=user_text)
-            response = await chat.send_message(msg)
-            if response:
-                logger.info(f"LLM success with {provider}/{model}")
-                return response if isinstance(response, str) else str(response)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"LLM provider {provider}/{model} failed: {e}")
-            last_err = e
-            continue
+        for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+            try:
+                session_id = f"bodhi-{uuid.uuid4()}"
+                chat = (
+                    LlmChat(
+                        api_key=EMERGENT_LLM_KEY,
+                        session_id=session_id,
+                        system_message=system_message,
+                    )
+                    .with_model(provider, model)
+                    .with_params(num_retries=0, timeout=60, request_timeout=60)
+                )
+                msg = UserMessage(text=user_text)
+                response = await asyncio.wait_for(
+                    chat.send_message(msg), timeout=PER_CALL_TIMEOUT
+                )
+                if response:
+                    if attempt > 1:
+                        logger.info(
+                            f"LLM success with {provider}/{model} on attempt {attempt}"
+                        )
+                    else:
+                        logger.info(f"LLM success with {provider}/{model}")
+                    return response if isinstance(response, str) else str(response)
+            except asyncio.TimeoutError:
+                last_err = TimeoutError(
+                    f"LLM call to {provider}/{model} exceeded {PER_CALL_TIMEOUT:.0f}s"
+                )
+                if attempt < RETRY_MAX_ATTEMPTS:
+                    delay = RETRY_BASE_DELAY_SEC * (RETRY_BACKOFF ** (attempt - 1))
+                    logger.warning(
+                        f"LLM {provider}/{model} attempt {attempt}/{RETRY_MAX_ATTEMPTS} "
+                        f"timed out, retry in {delay:.1f}s"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.warning(
+                    f"LLM provider {provider}/{model} timed out (attempt {attempt})"
+                )
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                transient = _is_transient(e)
+                if transient and attempt < RETRY_MAX_ATTEMPTS:
+                    delay = RETRY_BASE_DELAY_SEC * (RETRY_BACKOFF ** (attempt - 1))
+                    logger.warning(
+                        f"LLM {provider}/{model} attempt {attempt}/{RETRY_MAX_ATTEMPTS} "
+                        f"transient error, retry in {delay:.1f}s: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.warning(
+                    f"LLM provider {provider}/{model} failed (attempt {attempt}, "
+                    f"transient={transient}): {e}"
+                )
+                break
     raise RuntimeError(f"All LLM providers failed: {last_err}")
 
 
