@@ -26,6 +26,9 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Provider fallback chain for LLMs
 - PDF export of the generated paper
 
+## What's Implemented — 2026-05-05 (502 timeout fix)
+- `/api/papers/generate` now returns instantly (~0.2s) with `generation_status: "pending"` and runs the LLM call in a `_generate_paper_background` task. Frontend polls and shows a "Generating…" card while pending, a red "Generation failed" card if the LLM ultimately errors. PDF download endpoint returns 409 if status is pending/failed.
+
 ## What's Implemented — 2026-04-21 (Enhancements)
 - **Editable papers + feedback loop**: PATCH `/papers/{id}` updates meta + sections; every question edit is logged to `paper_edits` and surfaced to the LLM as "teacher preferences" context in subsequent generations
 - **Diagrams in questions**: LLM flags `needs_diagram`, backend generates PNGs via Gemini Nano Banana in parallel (max 5 per paper), stored in object storage; served via `/papers/{id}/diagrams/{qid}` and embedded in the PDF via reportlab
@@ -53,7 +56,13 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Validation that no generated question matches textbook content (similarity check)
 - Admin dashboard & seed admin flow
 
-## What's Implemented — 2026-05-03 (PDF rendering fixes)
+## What's Implemented — 2026-05-06 (Bodhi.ai rebrand + custom prompt + format mix)
+- **Rebrand QPGEN → Bodhi.ai** (display only — internal code/DB names unchanged): Header, Login, Register pages, browser tab title. Added `.brand-mark` CSS class with relaxed kerning so the lowercase "i.ai" doesn't render as "Lai" under the heavy Cabinet Grotesk display font; `.ai` is rendered in the brand blue.
+- **Additional Instructions field** on New Paper: free-text multi-line area whose contents are appended to the LLM prompt as a "TEACHER'S ADDITIONAL INSTRUCTIONS" block (cannot override topic/marks/format constraints).
+- **Question Format Mix card**: percentage sliders for MCQ / Short Answer / Long Answer / Fill-in-the-blanks / True-False that must sum to 100% (or set all to 0 to let AI decide). Teachers can add custom format chips like "Case Study" or "Assertion-Reason" via an inline input; chips are removable. Each generated question is now tagged with a `format` field, surfaced as a badge in PaperView and in the PDF tag line.
+- Backend: `PaperRequest` extended with `custom_instructions` (str) and `format_distribution` (Dict[str,int]); both stored on the paper doc and woven into `qgen_prompt`. The prompt enforces format conventions (MCQ → 4 options + "Choose the correct option", True/False → end with "True or False?", Fill-in-the-blanks → use `_____`, etc.).
+
+## What's Implemented — 2026-05-05 (502 timeout fix)
 - **Unicode-capable PDF font**: registered DejaVuSans (Bold/Oblique) with ReportLab so characters like `·`, `°`, `⁻¹`, `²`, `π`, `θ`, `×`, `≈` render instead of being silently dropped.
 - **Instructions line now passes through the LaTeX-to-image pipeline** — previously any `$...$` expression in paper instructions leaked as raw backslash syntax.
 - **Diagrams preserve their natural aspect ratio** (via Pillow), bounded by max width/height, no longer squashed into a forced 80×80mm square.

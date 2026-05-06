@@ -41,7 +41,9 @@ export default function Header() {
             <Stack size={22} weight="fill" color="#FFC300" />
           </div>
           <div className="leading-none">
-            <div className="font-display text-xl">QPGEN</div>
+            <div className="brand-mark text-xl">
+              Bodhi<span className="accent">.ai</span>
+            </div>
             <div className="overline text-neutral-500 text-[10px] mt-0.5">
               Question Paper Studio
             </div>

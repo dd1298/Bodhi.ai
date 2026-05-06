@@ -489,8 +489,10 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
                     q_style,
                 )
             )
-            tags = [t for t in [qtype, difficulty] if t]
+            tags = [t for t in [qtype, q.get("format", ""), difficulty] if t]
             if tags:
+                # Make format display human-friendly (snake_case -> spaces)
+                tags = [str(t).replace("_", " ") for t in tags]
                 story.append(Paragraph(" · ".join(tags), tag_style))
 
             # Embed diagram if present

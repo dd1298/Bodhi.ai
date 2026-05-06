@@ -49,6 +49,8 @@ def qgen_prompt(
     duration: int,
     context_excerpt: str,
     feedback_hints: str = "",
+    format_distribution: dict | None = None,
+    custom_instructions: str = "",
 ) -> str:
     target_q = max(5, min(25, total_marks // 3))
     info_n = round(target_q * distribution.get("information", 0) / 100)
@@ -76,6 +78,38 @@ def qgen_prompt(
         )
     topics_block = "\n".join(topic_lines)
 
+    # Optional question-format mix (MCQ / Short Answer / Long Answer / etc).
+    format_block = ""
+    if format_distribution:
+        fmt_lines = []
+        for fmt, pct in format_distribution.items():
+            if pct <= 0:
+                continue
+            n = max(1, round(target_q * pct / 100))
+            fmt_lines.append(f"- {fmt}: ~{n} question{'s' if n != 1 else ''} ({pct}%)")
+        if fmt_lines:
+            format_block = (
+                "QUESTION FORMAT MIX (mandatory — set each question's 'format' field):\n"
+                + "\n".join(fmt_lines)
+                + "\nFormat conventions:\n"
+                "  - mcq: include 4 options labelled (a)-(d) within the question text "
+                "and end with 'Choose the correct option.'\n"
+                "  - short_answer: 2-3 sentence answer expected.\n"
+                "  - long_answer: detailed multi-paragraph answer expected.\n"
+                "  - fill_blank: include one or more '_____' blanks in the question.\n"
+                "  - true_false: end with 'True or False?'\n"
+                "  - For any custom format label, follow the spirit of the label "
+                "(e.g., 'case_study' → present a short scenario then ask).\n\n"
+            )
+
+    custom_block = ""
+    if custom_instructions:
+        custom_block = (
+            "TEACHER'S ADDITIONAL INSTRUCTIONS (honour these strictly, "
+            "but do NOT let them override the topic/marks/format constraints above):\n"
+            f"{custom_instructions.strip()}\n\n"
+        )
+
     return (
         f"Generate an ORIGINAL question paper for Class {klass} - {subject}.\n"
         f"Topics to cover (with weightage — heavier topics get more questions):\n"
@@ -84,12 +118,14 @@ def qgen_prompt(
         f"Total marks: {total_marks}, Duration: {duration} minutes.\n"
         f"Target question counts: information={info_n}, concept={concept_n}, application={app_n}.\n\n"
         f"Question type definitions:\n{guide}\n\n"
+        f"{format_block}"
         "Marks allocation: assign 1-2 marks for information, 3-4 for concept, 5-6 for application, "
         "ensuring the sum equals the total marks as closely as possible.\n\n"
         "TOPIC COVERAGE RULE (mandatory):\n"
         "- Distribute questions across ALL listed topics in proportion to their weights.\n"
         "- No single topic should exceed its target by more than 1 question.\n"
         "- If a topic has weight > 0 it MUST receive at least one question.\n\n"
+        f"{custom_block}"
         f"{feedback_block}"
         "MATH FORMATTING (STRICT — critical for PDF rendering):\n"
         "Wrap EVERY mathematical or scientific expression in LaTeX delimiters — "
@@ -116,6 +152,7 @@ def qgen_prompt(
         '    { "title": "Section A - Information Based",\n'
         '      "questions": [\n'
         '        { "question": "...", "topic": "Topic name", "type": "information",\n'
+        '          "format": "mcq|short_answer|long_answer|fill_blank|true_false|custom_label|\\"\\"",\n'
         '          "difficulty": "easy|medium|hard", "marks": 1, "needs_diagram": false }\n'
         '      ]\n'
         '    }, ...\n'
@@ -126,6 +163,7 @@ def qgen_prompt(
         "- Every question must be originally phrased.\n"
         "- Stay strictly within the listed topics.\n"
         "- Set 'topic' field on every question to the matching topic name from the list above.\n"
+        "- Set 'format' field on every question (use one of the provided format labels, or empty string if none specified).\n"
         "- Ensure sum of marks of all questions equals the total marks.\n"
         "- At most 5 questions in the entire paper should have needs_diagram=true.\n"
         "- No prose outside the JSON.\n\n"

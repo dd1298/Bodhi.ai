@@ -13,6 +13,13 @@ import {
 } from "@phosphor-icons/react";
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
+const DEFAULT_FORMATS = [
+  { key: "mcq", label: "MCQ", default: 0 },
+  { key: "short_answer", label: "Short Answer", default: 40 },
+  { key: "long_answer", label: "Long Answer", default: 40 },
+  { key: "fill_blank", label: "Fill in the Blanks", default: 10 },
+  { key: "true_false", label: "True / False", default: 10 },
+];
 
 export default function NewPaper() {
   const navigate = useNavigate();
@@ -28,10 +35,25 @@ export default function NewPaper() {
   const [selectedTopics, setSelectedTopics] = useState([]); // [{name, weight}]
   const [generating, setGenerating] = useState(false);
   const [extractingId, setExtractingId] = useState(null);
+  const [customInstructions, setCustomInstructions] = useState("");
+  // Format mix: array of { key, label, value, custom }
+  const [formats, setFormats] = useState(
+    DEFAULT_FORMATS.map((f) => ({ ...f, value: f.default, custom: false }))
+  );
+  const [newFormatLabel, setNewFormatLabel] = useState("");
 
   const application = useMemo(
     () => Math.max(0, 100 - info - concept),
     [info, concept]
+  );
+
+  const formatTotal = useMemo(
+    () => formats.reduce((sum, f) => sum + Number(f.value || 0), 0),
+    [formats]
+  );
+  const formatActive = useMemo(
+    () => formats.some((f) => Number(f.value || 0) > 0),
+    [formats]
   );
 
   useEffect(() => {
@@ -107,6 +129,30 @@ export default function NewPaper() {
     }
   };
 
+  const setFormatValue = (key, v) => {
+    setFormats((curr) =>
+      curr.map((f) =>
+        f.key === key ? { ...f, value: clamp(v, 0, 100) } : f
+      )
+    );
+  };
+
+  const addCustomFormat = () => {
+    const label = newFormatLabel.trim();
+    if (!label) return;
+    const key = label.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    if (formats.some((f) => f.key === key)) {
+      toast.error("That format is already in the list");
+      return;
+    }
+    setFormats((curr) => [...curr, { key, label, value: 0, custom: true }]);
+    setNewFormatLabel("");
+  };
+
+  const removeFormat = (key) => {
+    setFormats((curr) => curr.filter((f) => f.key !== key));
+  };
+
   const onGenerate = async (e) => {
     e.preventDefault();
     if (selectedTbIds.length === 0)
@@ -116,6 +162,17 @@ export default function NewPaper() {
       return toast.error("Select at least one topic");
     if (info + concept + application !== 100)
       return toast.error("Distribution must sum to 100%");
+    if (formatActive && formatTotal !== 100)
+      return toast.error(
+        "Format mix must sum to 100% (or set all to 0 to let AI decide)"
+      );
+
+    // Build format_distribution payload (only non-zero)
+    const fmtPayload = {};
+    for (const f of formats) {
+      const v = Number(f.value || 0);
+      if (v > 0) fmtPayload[f.key] = v;
+    }
 
     // Derive subject / class from the first selected book
     const first = tbDetails[selectedTbIds[0]] || {};
@@ -131,6 +188,8 @@ export default function NewPaper() {
         duration_minutes: Number(duration),
         total_marks: Number(totalMarks),
         distribution: { information: info, concept, application },
+        format_distribution: fmtPayload,
+        custom_instructions: customInstructions.trim() || null,
       });
       toast.success("Generation started — opening paper…");
       navigate(`/papers/${data.id}`);
@@ -321,6 +380,121 @@ export default function NewPaper() {
               <p className="text-xs text-neutral-500 font-mono mt-3">
                 Application is auto-adjusted so total stays at 100%.
               </p>
+            </div>
+
+            <div className="qp-card" data-testid="format-mix-card">
+              <div className="flex items-center justify-between mb-2">
+                <div className="overline">// QUESTION FORMAT MIX</div>
+                <span
+                  className={`qp-badge ${
+                    !formatActive
+                      ? "qp-badge-success"
+                      : formatTotal === 100
+                      ? "qp-badge-success"
+                      : "qp-badge-red"
+                  }`}
+                  data-testid="format-total"
+                >
+                  {formatActive ? `${formatTotal}%` : "AUTO"}
+                </span>
+              </div>
+              <p className="text-xs text-neutral-500 font-mono mb-4">
+                MCQ, Short / Long Answer, Fill-in-the-blanks, True / False, or
+                add your own. Set all to 0 to let the AI decide.
+              </p>
+
+              {formats.map((f) => (
+                <div
+                  key={f.key}
+                  className="mb-3 last:mb-0"
+                  data-testid={`format-${f.key}`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="font-bold text-sm uppercase tracking-wider flex items-center gap-2">
+                      {f.label}
+                      {f.custom && (
+                        <button
+                          type="button"
+                          onClick={() => removeFormat(f.key)}
+                          className="text-neutral-400 hover:text-[#E63946]"
+                          aria-label="Remove custom format"
+                          data-testid={`format-remove-${f.key}`}
+                        >
+                          <XIcon size={12} weight="bold" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="font-mono text-sm font-bold">
+                      {f.value}%
+                    </div>
+                  </div>
+                  <div className="relative h-2 bg-neutral-200">
+                    <div
+                      className="absolute top-0 left-0 h-full bg-black"
+                      style={{ width: `${f.value}%` }}
+                    />
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={f.value}
+                    onChange={(e) =>
+                      setFormatValue(f.key, Number(e.target.value))
+                    }
+                    className="w-full mt-1"
+                    data-testid={`format-${f.key}-slider`}
+                  />
+                </div>
+              ))}
+
+              <div className="mt-4 flex items-center gap-2 border-t-2 border-black pt-3">
+                <input
+                  type="text"
+                  value={newFormatLabel}
+                  onChange={(e) => setNewFormatLabel(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addCustomFormat();
+                    }
+                  }}
+                  placeholder="Custom format (e.g., Case Study)"
+                  className="qp-input flex-1"
+                  data-testid="custom-format-input"
+                />
+                <button
+                  type="button"
+                  onClick={addCustomFormat}
+                  className="qp-btn qp-btn-secondary text-xs"
+                  data-testid="custom-format-add"
+                >
+                  <Plus size={14} weight="bold" /> Add
+                </button>
+              </div>
+            </div>
+
+            <div className="qp-card" data-testid="custom-instructions-card">
+              <div className="overline mb-2">
+                // ADDITIONAL INSTRUCTIONS FOR THE AI
+              </div>
+              <p className="text-xs text-neutral-500 font-mono mb-3">
+                Optional. The AI will honour these on top of topics, marks and
+                format above. e.g.&nbsp;
+                <span className="text-neutral-700">
+                  &ldquo;Make all numerical values whole numbers&rdquo;,
+                  &ldquo;Avoid Newton&rsquo;s laws&rdquo;, &ldquo;One question
+                  must be assertion-reason&rdquo;.
+                </span>
+              </p>
+              <textarea
+                value={customInstructions}
+                onChange={(e) => setCustomInstructions(e.target.value)}
+                rows={4}
+                className="qp-input font-mono text-sm"
+                placeholder="Type extra instructions for the question paper engine here..."
+                data-testid="custom-instructions-input"
+              />
             </div>
           </div>
 

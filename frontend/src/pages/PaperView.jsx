@@ -543,6 +543,14 @@ export default function PaperView() {
                         <div className="mt-2 flex flex-wrap gap-1 pl-6">
                           <span className={typeBadge(q.type)}>{q.type}</span>
                           <span className="qp-badge">{q.difficulty}</span>
+                          {q.format && (
+                            <span
+                              className="qp-badge"
+                              data-testid={`format-badge-${q.id}`}
+                            >
+                              {String(q.format).replace(/_/g, " ")}
+                            </span>
+                          )}
                           {q.diagram_path && (
                             <span className="qp-badge">
                               <ImageIcon size={10} weight="bold" /> diagram

@@ -44,7 +44,9 @@ export default function Login() {
               <BookOpen size={24} weight="fill" color="#FFC300" />
             </div>
             <div>
-              <div className="font-display text-2xl leading-none">QPGEN</div>
+              <div className="brand-mark text-2xl leading-none">
+                Bodhi<span className="accent">.ai</span>
+              </div>
               <div className="overline text-neutral-700 mt-1">
                 Question Paper Studio
               </div>
@@ -66,7 +68,7 @@ export default function Login() {
           </div>
 
           <div className="overline text-neutral-600">
-            © QPGEN — Academic control room
+            © Bodhi.ai — Academic control room
           </div>
         </div>
       </div>

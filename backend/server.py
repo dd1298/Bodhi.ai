@@ -4,7 +4,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
@@ -116,6 +116,12 @@ class PaperRequest(BaseModel):
     duration_minutes: int = 60
     total_marks: int = 50
     distribution: dict  # {information, concept, application}
+    # Optional free-form instructions appended to the LLM prompt.
+    custom_instructions: Optional[str] = None
+    # Optional question-format mix as percentages summing to ~100, e.g.
+    # {"mcq": 20, "short_answer": 40, "long_answer": 30, "fill_blank": 10}.
+    # Keys may be any string — built-in or teacher-defined custom labels.
+    format_distribution: Optional[Dict[str, int]] = None
 
 
 class QuestionInput(BaseModel):
@@ -558,6 +564,8 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     # Insert a placeholder paper immediately so we can return its id within
     # the proxy's 60s budget. The actual LLM call runs in a background task.
     paper_id = str(uuid.uuid4())
+    fmt_dist = {k: int(v) for k, v in (req.format_distribution or {}).items() if int(v) > 0}
+    custom_instructions = (req.custom_instructions or "").strip()
     paper_doc = {
         "id": paper_id,
         "owner_id": user["id"],
@@ -571,6 +579,8 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "duration_minutes": req.duration_minutes,
         "total_marks": req.total_marks,
         "distribution": dist,
+        "format_distribution": fmt_dist,
+        "custom_instructions": custom_instructions,
         "instructions": "",
         "sections": [],
         "diagrams_pending": 0,
@@ -597,6 +607,8 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
             duration_minutes=req.duration_minutes,
             context_excerpt=context_excerpt,
             feedback_hints=feedback_hints,
+            format_distribution=fmt_dist,
+            custom_instructions=custom_instructions,
         )
     )
 
@@ -615,6 +627,8 @@ async def _generate_paper_background(
     duration_minutes: int,
     context_excerpt: str,
     feedback_hints: str,
+    format_distribution: Optional[dict] = None,
+    custom_instructions: str = "",
 ) -> None:
     """Run question generation off the request loop so the LLM call doesn't
     burst the 60s ingress timeout. Writes the result back to the paper doc
@@ -629,6 +643,8 @@ async def _generate_paper_background(
         duration=duration_minutes,
         context_excerpt=context_excerpt,
         feedback_hints=feedback_hints,
+        format_distribution=format_distribution or {},
+        custom_instructions=custom_instructions or "",
     )
     try:
         raw = await chat_complete(
@@ -659,6 +675,7 @@ async def _generate_paper_background(
             q.setdefault("type", "concept")
             q.setdefault("difficulty", difficulty)
             q.setdefault("needs_diagram", False)
+            q.setdefault("format", "")
 
     # Mark diagram jobs pending so the UI can show "generating" placeholders.
     pending_count = 0

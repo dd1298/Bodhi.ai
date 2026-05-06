@@ -37,6 +37,18 @@ code,
     letter-spacing: -0.03em;
 }
 
+.brand-mark {
+    font-family: "Cabinet Grotesk", sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.005em;
+    font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
+}
+
+.brand-mark .accent {
+    color: #002fa7;
+    margin-left: 0.06em;
+}
+
 .font-heading {
     font-family: "Cabinet Grotesk", sans-serif;
     font-weight: 800;
