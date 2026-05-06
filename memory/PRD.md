@@ -56,6 +56,14 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Validation that no generated question matches textbook content (similarity check)
 - Admin dashboard & seed admin flow
 
+## What's Implemented — 2026-05-06 (P1 Admin Dashboard)
+- **Seeded admin** `admin@bodhi.ai` / `admin123` (idempotent on backend startup; documented in `/app/memory/test_credentials.md`).
+- **Shared library**: `is_shared` flag on textbook docs; admin can toggle via `PATCH /api/admin/textbooks/{id}/share?is_shared=…`. Shared books appear in every teacher's `/api/textbooks` list with `is_owned=false`, are read-only on the Textbooks page, and can be used as sources in paper generation. Generate / get-textbook endpoints now allow access to shared books. Teachers cannot self-share at upload time (only admin role honors `?is_shared=true`).
+- **Admin endpoints (all 403 for non-admin)**: `/api/admin/overview` (counts), `/api/admin/users` (with textbook+paper counts, no password_hash leak), `/api/admin/textbooks` (with owner_email + is_shared), `/api/admin/papers` (with owner_email), share toggle.
+- **Admin Console (`/app/frontend/src/pages/Admin.jsx`)** at `/admin` (gated by new `AdminRoute`): 5 stat cards, 5 tabs — Shared Library / All Textbooks / All Papers / Teachers / Bulk Upload. Bulk Upload supports drag-multi-PDF, queue progress, and an "auto-add to shared library" checkbox.
+- **Header**: `Admin` nav link only visible when `user.role === "admin"`.
+- **Verified**: testing_agent_v3_fork iteration_4 — 18/18 backend tests + full frontend smoke green; zero issues.
+
 ## What's Implemented — 2026-05-06 (Bodhi.ai rebrand + custom prompt + format mix)
 - **Rebrand QPGEN → Bodhi.ai** (display only — internal code/DB names unchanged): Header, Login, Register pages, browser tab title. Added `.brand-mark` CSS class with relaxed kerning so the lowercase "i.ai" doesn't render as "Lai" under the heavy Cabinet Grotesk display font; `.ai` is rendered in the brand blue.
 - **Additional Instructions field** on New Paper: free-text multi-line area whose contents are appended to the LLM prompt as a "TEACHER'S ADDITIONAL INSTRUCTIONS" block (cannot override topic/marks/format constraints).
