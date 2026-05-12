@@ -77,6 +77,16 @@ export default function NewPaper() {
     [formats]
   );
 
+  // When the teacher provides Additional Instructions or a Paper Blueprint,
+  // those take precedence over the Question Distribution and Format Mix
+  // sliders — the teacher is expected to describe their desired type/format
+  // mix inside the prompt itself. We grey the slider cards out in that case.
+  const promptOverride = useMemo(
+    () =>
+      Boolean(customInstructions.trim()) || Boolean(sectionBlueprint.trim()),
+    [customInstructions, sectionBlueprint]
+  );
+
   useEffect(() => {
     api.get("/textbooks").then((r) => setTextbooks(r.data));
   }, []);
@@ -181,18 +191,20 @@ export default function NewPaper() {
     if (!title) return toast.error("Title required");
     if (selectedTopics.length === 0)
       return toast.error("Select at least one topic");
-    if (info + concept + application !== 100)
+    if (!promptOverride && info + concept + application !== 100)
       return toast.error("Distribution must sum to 100%");
-    if (formatActive && formatTotal !== 100)
+    if (!promptOverride && formatActive && formatTotal !== 100)
       return toast.error(
         "Format mix must sum to 100% (or set all to 0 to let AI decide)"
       );
 
-    // Build format_distribution payload (only non-zero)
+    // Build format_distribution payload (only when sliders are still active)
     const fmtPayload = {};
-    for (const f of formats) {
-      const v = Number(f.value || 0);
-      if (v > 0) fmtPayload[f.key] = v;
+    if (!promptOverride) {
+      for (const f of formats) {
+        const v = Number(f.value || 0);
+        if (v > 0) fmtPayload[f.key] = v;
+      }
     }
 
     // Derive subject / class from the first selected book
@@ -363,19 +375,32 @@ export default function NewPaper() {
               </div>
             </div>
 
-            <div className="qp-card">
+            <div
+              className={`qp-card ${promptOverride ? "opacity-50 pointer-events-none" : ""}`}
+              data-testid="distribution-card"
+              aria-disabled={promptOverride}
+            >
               <div className="flex items-center justify-between mb-4">
                 <div className="overline">// QUESTION DISTRIBUTION</div>
-                <span
-                  className={`qp-badge ${
-                    info + concept + application === 100
-                      ? "qp-badge-success"
-                      : "qp-badge-red"
-                  }`}
-                  data-testid="distribution-total"
-                >
-                  {info + concept + application}%
-                </span>
+                {promptOverride ? (
+                  <span
+                    className="qp-badge qp-badge-yellow"
+                    data-testid="distribution-overridden"
+                  >
+                    OVERRIDDEN BY PROMPT
+                  </span>
+                ) : (
+                  <span
+                    className={`qp-badge ${
+                      info + concept + application === 100
+                        ? "qp-badge-success"
+                        : "qp-badge-red"
+                    }`}
+                    data-testid="distribution-total"
+                  >
+                    {info + concept + application}%
+                  </span>
+                )}
               </div>
 
               <SliderRow
@@ -404,21 +429,34 @@ export default function NewPaper() {
               </p>
             </div>
 
-            <div className="qp-card" data-testid="format-mix-card">
+            <div
+              className={`qp-card ${promptOverride ? "opacity-50 pointer-events-none" : ""}`}
+              data-testid="format-mix-card"
+              aria-disabled={promptOverride}
+            >
               <div className="flex items-center justify-between mb-2">
                 <div className="overline">// QUESTION FORMAT MIX</div>
-                <span
-                  className={`qp-badge ${
-                    !formatActive
-                      ? "qp-badge-success"
-                      : formatTotal === 100
-                      ? "qp-badge-success"
-                      : "qp-badge-red"
-                  }`}
-                  data-testid="format-total"
-                >
-                  {formatActive ? `${formatTotal}%` : "AUTO"}
-                </span>
+                {promptOverride ? (
+                  <span
+                    className="qp-badge qp-badge-yellow"
+                    data-testid="format-overridden"
+                  >
+                    OVERRIDDEN BY PROMPT
+                  </span>
+                ) : (
+                  <span
+                    className={`qp-badge ${
+                      !formatActive
+                        ? "qp-badge-success"
+                        : formatTotal === 100
+                        ? "qp-badge-success"
+                        : "qp-badge-red"
+                    }`}
+                    data-testid="format-total"
+                  >
+                    {formatActive ? `${formatTotal}%` : "AUTO"}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-neutral-500 font-mono mb-4">
                 MCQ, Short / Long Answer, Fill-in-the-blanks, True / False, or
@@ -500,9 +538,9 @@ export default function NewPaper() {
               <div className="overline mb-2">// PAPER BLUEPRINT (OPTIONAL)</div>
               <p className="text-xs text-neutral-500 font-mono mb-3">
                 Paste your board&rsquo;s exact section pattern. When set, this
-                <b> overrides </b> the Question Distribution and Format Mix
-                above &mdash; the AI follows the blueprint verbatim. Useful for
-                ICSE / CBSE / IGCSE / state-board templates.
+                <b> overrides </b> the Question Distribution and Question Format
+                Mix above &mdash; the AI follows the blueprint verbatim. Useful
+                for ICSE / CBSE / IGCSE / state-board templates.
               </p>
               <div className="flex flex-wrap gap-2 mb-3">
                 <button
@@ -555,12 +593,14 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
                 // ADDITIONAL INSTRUCTIONS FOR THE AI
               </div>
               <p className="text-xs text-neutral-500 font-mono mb-3">
-                Optional. The AI will honour these on top of topics, marks and
-                format above. e.g.&nbsp;
+                Optional. <b>When set, this overrides the Question Distribution
+                and Format Mix sliders above</b> &mdash; describe your full
+                requirement (sections, types, format mix, numbering style)
+                right here. Example:&nbsp;
                 <span className="text-neutral-700">
-                  &ldquo;Make all numerical values whole numbers&rdquo;,
-                  &ldquo;Avoid Newton&rsquo;s laws&rdquo;, &ldquo;One question
-                  must be assertion-reason&rdquo;.
+                  &ldquo;30% MCQ, 40% short answer, 30% long answer. Use only
+                  whole numbers. Section A is compulsory, Section B has internal
+                  choice.&rdquo;
                 </span>
               </p>
               <textarea

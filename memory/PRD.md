@@ -56,6 +56,11 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Validation that no generated question matches textbook content (similarity check)
 - Admin dashboard & seed admin flow
 
+## What's Implemented — 2026-05-12 (Prompt takes precedence over sliders)
+- When the teacher fills **Additional Instructions** OR **Paper Blueprint**, the **Question Distribution** and **Question Format Mix** slider cards are now visually disabled (opacity-50, `pointer-events: none`) and show a yellow **"OVERRIDDEN BY PROMPT"** badge.
+- Backend `qgen_prompt` now skips the default Bloom-distribution block, the marks-allocation rule, and the format-mix block when EITHER `custom_instructions` or `section_blueprint` is non-empty. The teacher's prompt block is promoted to **HIGHEST PRIORITY**, so the AI follows their description of types/marks/formats verbatim.
+- Frontend validation no longer enforces the 100% slider sums when a prompt is active; the `format_distribution` payload is sent empty in that case so it doesn't compete with the prompt.
+
 ## What's Implemented — 2026-05-06 (Markdown leak fix in PDFs)
 - **Stripped LLM markdown from PDF output**: LLM was emitting `**Q1.**`, `**1.**`, `**(i)**` (markdown bold) which leaked into the PDF as literal asterisks. Added `_markdown_to_reportlab` preprocessor in `pdf_utils.py`:
   - `**bold**` → `<b>bold</b>` (renders bold instead of asterisks)

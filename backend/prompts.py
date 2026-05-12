@@ -80,10 +80,16 @@ def qgen_prompt(
     topics_block = "\n".join(topic_lines)
 
     has_blueprint = bool(section_blueprint and section_blueprint.strip())
+    has_custom = bool(custom_instructions and custom_instructions.strip())
+    # When EITHER a blueprint or free-form custom instructions are given,
+    # the user-supplied prompt takes precedence over the slider-based
+    # Question Distribution and Format Mix. The teacher is expected to
+    # describe those inside their prompt/blueprint if they care about them.
+    has_override = has_blueprint or has_custom
 
     # Optional question-format mix (MCQ / Short Answer / Long Answer / etc).
     format_block = ""
-    if format_distribution:
+    if format_distribution and not has_override:
         fmt_lines = []
         for fmt, pct in format_distribution.items():
             if pct <= 0:
@@ -106,10 +112,12 @@ def qgen_prompt(
             )
 
     custom_block = ""
-    if custom_instructions:
+    if has_custom:
         custom_block = (
-            "TEACHER'S ADDITIONAL INSTRUCTIONS (honour these strictly, "
-            "but do NOT let them override the topic/marks/format constraints above):\n"
+            "TEACHER'S ADDITIONAL INSTRUCTIONS (HIGHEST PRIORITY — these "
+            "override the default question-type and format defaults. The "
+            "teacher will usually describe their desired section / type / "
+            "format mix inside this block; honour it strictly):\n"
             f"{custom_instructions.strip()}\n\n"
         )
 
@@ -127,13 +135,15 @@ def qgen_prompt(
             f"{section_blueprint.strip()}\n\n"
         )
 
-    # Default Bloom-based section split — only used when no blueprint is given.
-    default_section_block = "" if has_blueprint else (
+    # Default Bloom-based section split — only used when neither blueprint nor
+    # custom_instructions are given. The teacher's prompt is expected to
+    # describe their preferred type/marks distribution.
+    default_section_block = "" if has_override else (
         f"Target question counts: information={info_n}, concept={concept_n}, application={app_n}.\n\n"
         f"Question type definitions:\n{guide}\n\n"
     )
     marks_rule = (
-        "" if has_blueprint else
+        "" if has_override else
         "Marks allocation: assign 1-2 marks for information, 3-4 for concept, 5-6 for application, "
         "ensuring the sum equals the total marks as closely as possible.\n\n"
     )
