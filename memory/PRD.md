@@ -26,6 +26,9 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Provider fallback chain for LLMs
 - PDF export of the generated paper
 
+## What's Implemented — 2026-02-15 (PDF math sizing fix)
+- `pdf_utils._math_to_paragraph_html` now routes inline + block math through the new `_math_img_tag()` helper that opens each rendered LaTeX PNG with PIL, computes its natural width/height at 220 dpi, caps height at 18pt for stacked expressions, and emits a proportional `<img width=... height=... valign="-1">` tag. Eliminates the "bumpy line / oversized equation" issue users reported in downloaded PDFs. Verified via `/app/backend/tests/test_pdf_math.py` (inline F=ma renders at ~12pt, fraction caps at 18pt, full paper PDF renders without errors, visual analysis confirmed proportional sizing).
+
 ## What's Implemented — 2026-05-05 (502 timeout fix)
 - `/api/papers/generate` now returns instantly (~0.2s) with `generation_status: "pending"` and runs the LLM call in a `_generate_paper_background` task. Frontend polls and shows a "Generating…" card while pending, a red "Generation failed" card if the LLM ultimately errors. PDF download endpoint returns 409 if status is pending/failed.
 

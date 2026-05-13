@@ -318,9 +318,7 @@ def _math_to_paragraph_html(text: str) -> str:
         else:
             png = _render_math_png(val.strip())
             if png:
-                out_parts.append(
-                    f'<img src="{png}" valign="middle" height="13"/>'
-                )
+                out_parts.append(_math_img_tag(png))
             else:
                 # Friendly textual fallback — no raw backslash commands.
                 friendly = _strip_latex_for_fallback(val)
