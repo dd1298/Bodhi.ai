@@ -71,14 +71,17 @@ async def chat_complete(system_message: str, user_text: str) -> str:
     exponential backoff. Non-transient errors (auth, budget, malformed) fail
     fast and we move to the next provider.
 
-    We wrap each attempt in `asyncio.wait_for(timeout=PER_CALL_TIMEOUT)` so
-    that even if the OpenAI SDK is doing its own internal 60s-each retries
-    on a 502, our outer call aborts on time and we move on. This is essential
-    when the upstream LLM gateway is misbehaving — without it a single failed
-    generation can take 12+ minutes and saturate the asyncio worker.
+    IMPORTANT: emergentintegrations.LlmChat.send_message() is declared `async`
+    but internally calls the SYNC litellm.completion(...) which blocks for
+    60-90s on each call. Awaiting it directly freezes the entire FastAPI
+    event loop — every other API request queues behind it and the ingress
+    proxy 502s after its own 60s timeout. To prevent this we run each
+    send_message call in a worker thread so the main loop stays free.
     """
-    PER_CALL_TIMEOUT = 75.0  # seconds — covers 1 LiteLLM call + small slack
+    PER_CALL_TIMEOUT = 75.0
     last_err: Exception | None = None
+    loop = asyncio.get_running_loop()
+
     for provider, model in PROVIDER_CHAIN:
         for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
             try:
@@ -93,8 +96,16 @@ async def chat_complete(system_message: str, user_text: str) -> str:
                     .with_params(num_retries=0, timeout=60, request_timeout=60)
                 )
                 msg = UserMessage(text=user_text)
+
+                # Run the (sync-inside-async) call in a worker thread so the
+                # main event loop is NOT blocked. The thread spins up its own
+                # event loop with asyncio.run().
+                def _sync_call(_chat=chat, _msg=msg):
+                    return asyncio.run(_chat.send_message(_msg))
+
                 response = await asyncio.wait_for(
-                    chat.send_message(msg), timeout=PER_CALL_TIMEOUT
+                    loop.run_in_executor(None, _sync_call),
+                    timeout=PER_CALL_TIMEOUT,
                 )
                 if response:
                     if attempt > 1:
@@ -141,9 +152,13 @@ async def chat_complete(system_message: str, user_text: str) -> str:
 
 async def generate_diagram(description: str) -> bytes | None:
     """Generate a clean B&W line diagram for an exam question. Returns PNG bytes
-    or None on failure. Non-raising — diagrams are best-effort."""
+    or None on failure. Non-raising — diagrams are best-effort.
+
+    Runs in a worker thread so the sync litellm call doesn't block the
+    FastAPI event loop (see chat_complete for the same pattern).
+    """
     try:
-        session_id = f"qpgen-diag-{uuid.uuid4()}"
+        session_id = f"bodhi-diag-{uuid.uuid4()}"
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=session_id,
@@ -152,7 +167,9 @@ async def generate_diagram(description: str) -> bytes | None:
                 "for exam papers. Use clear labels, simple geometric shapes, "
                 "no color, white background."
             ),
-        ).with_model("gemini", DIAGRAM_MODEL).with_params(modalities=["image", "text"])
+        ).with_model("gemini", DIAGRAM_MODEL).with_params(
+            modalities=["image", "text"], num_retries=0, timeout=60
+        )
         prompt = (
             f"Create a simple, clean black-and-white line diagram for a school exam. "
             f"Subject/figure: {description}. "
@@ -163,7 +180,15 @@ async def generate_diagram(description: str) -> bytes | None:
             f"repeat the same element or caption twice in the figure."
         )
         msg = UserMessage(text=prompt)
-        _text, images = await chat.send_message_multimodal_response(msg)
+        loop = asyncio.get_running_loop()
+
+        def _sync_call(_chat=chat, _msg=msg):
+            return asyncio.run(_chat.send_message_multimodal_response(_msg))
+
+        _text, images = await asyncio.wait_for(
+            loop.run_in_executor(None, _sync_call),
+            timeout=75.0,
+        )
         if images:
             img_b64 = images[0]["data"]
             return base64.b64decode(img_b64)

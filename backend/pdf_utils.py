@@ -139,7 +139,10 @@ def _render_math_png(latex: str, fontsize: int = 11) -> str | None:
         return _MATH_CACHE[key]
     try:
         fig = plt.figure(figsize=(0.01, 0.01))
-        fig.text(0, 0, f"${latex}$", fontsize=fontsize)
+        # Render slightly smaller than the body font so inline math doesn't
+        # tower over surrounding text. fontsize=10 here pairs well with the
+        # 11pt body text in the question paragraph styles.
+        fig.text(0, 0, f"${latex}$", fontsize=10)
         out = os.path.join(
             tempfile.gettempdir(), f"qpgen_math_{uuid.uuid4().hex}.png"
         )
@@ -159,6 +162,34 @@ def _render_math_png(latex: str, fontsize: int = 11) -> str | None:
         except Exception:
             pass
         return None
+
+
+def _math_img_tag(png_path: str) -> str:
+    """Build an `<img>` tag for a ReportLab Paragraph that displays the math
+    PNG at a sensible inline size — matching the body text height when the
+    expression is single-line, and slightly taller for stacked expressions
+    (fractions, sums). Aspect ratio is preserved.
+    """
+    try:
+        from PIL import Image as PILImage  # noqa: PLC0415
+        with PILImage.open(png_path) as pim:
+            pw, ph = pim.size
+        # PNG is at 220 dpi from matplotlib (1 pt = 220/72 px).
+        natural_h_pt = (ph / 220.0) * 72.0
+        natural_w_pt = (pw / 220.0) * 72.0
+        # Cap height at 18pt so giant fractions don't blow up the line spacing.
+        max_h = 18.0
+        if natural_h_pt > max_h:
+            scale = max_h / natural_h_pt
+            natural_h_pt = max_h
+            natural_w_pt *= scale
+        return (
+            f'<img src="{png_path}" valign="-1" '
+            f'width="{natural_w_pt:.2f}" height="{natural_h_pt:.2f}"/>'
+        )
+    except Exception:
+        # Fallback: previous fixed-height behaviour
+        return f'<img src="{png_path}" valign="middle" height="11"/>'
 
 
 def _make_diagram_image(img_bytes: bytes, max_width_mm: float = 100, max_height_mm: float = 90):
