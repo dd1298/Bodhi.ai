@@ -184,6 +184,41 @@ async def startup():
     except Exception as e:  # noqa: BLE001
         logger.warning(f"index create: {e}")
 
+    # Recover orphaned background jobs. Background tasks live in-process, so
+    # anything still marked "pending" at startup was interrupted by a previous
+    # restart/crash and will never finish on its own. Flip them to "failed"
+    # so the UI surfaces the "Retry Generation" affordance instead of a
+    # forever-spinning skeleton.
+    try:
+        orphan_msg = (
+            "Generation was interrupted by a server restart. "
+            "Click 'Retry Generation' to try again."
+        )
+        paper_res = await db.papers.update_many(
+            {"generation_status": "pending"},
+            {"$set": {
+                "generation_status": "failed",
+                "generation_error": orphan_msg,
+            }},
+        )
+        if paper_res.modified_count:
+            logger.warning(
+                f"Recovered {paper_res.modified_count} orphaned 'pending' paper(s) at startup"
+            )
+        sol_res = await db.papers.update_many(
+            {"solution.status": "pending"},
+            {"$set": {
+                "solution.status": "failed",
+                "solution.error": orphan_msg,
+            }},
+        )
+        if sol_res.modified_count:
+            logger.warning(
+                f"Recovered {sol_res.modified_count} orphaned 'pending' solution(s) at startup"
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Orphan recovery failed: {e}")
+
     # Seed default admin account if missing. Idempotent — never overwrites
     # an existing admin (so password rotation is the operator's job).
     try:
