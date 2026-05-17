@@ -131,8 +131,10 @@ def _strip_latex_for_fallback(latex: str) -> str:
 
 
 def _render_math_png(latex: str, fontsize: int = 11) -> str | None:
-    """Render a LaTeX expression to a transparent PNG using matplotlib mathtext.
-    Returns the file path, or None on failure."""
+    """Render a LaTeX expression to a high-DPI transparent PNG using
+    matplotlib mathtext. We render at 600 dpi (up from 220) so the image
+    stays razor-sharp when zoomed or printed — at the cost of a slightly
+    larger PDF. ReportLab compresses PNG streams inside the PDF anyway."""
     latex = _normalise_latex(latex)
     key = (latex, fontsize)
     if key in _MATH_CACHE:
@@ -140,21 +142,43 @@ def _render_math_png(latex: str, fontsize: int = 11) -> str | None:
     try:
         fig = plt.figure(figsize=(0.01, 0.01))
         # Render slightly smaller than the body font so inline math doesn't
-        # tower over surrounding text. fontsize=10 here pairs well with the
-        # 11pt body text in the question paragraph styles.
+        # tower over surrounding text. fontsize=10 pairs well with 11pt body.
         fig.text(0, 0, f"${latex}$", fontsize=10)
         out = os.path.join(
             tempfile.gettempdir(), f"qpgen_math_{uuid.uuid4().hex}.png"
         )
         fig.savefig(
             out,
-            dpi=220,
+            dpi=600,
             bbox_inches="tight",
             pad_inches=0.02,
             transparent=True,
         )
         plt.close(fig)
         _MATH_CACHE[key] = out
+        return out
+    except Exception:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+        return None
+
+
+def _render_math_svg(latex: str) -> str | None:
+    """Render a LaTeX expression to a vector SVG. Available for future use
+    when a block-math flowable wants true-vector rendering (the inline
+    `<img>` tags inside ReportLab Paragraphs only accept raster images, so
+    inline math still uses `_render_math_png`)."""
+    latex = _normalise_latex(latex)
+    try:
+        fig = plt.figure(figsize=(0.01, 0.01))
+        fig.text(0, 0, f"${latex}$", fontsize=11)
+        out = os.path.join(
+            tempfile.gettempdir(), f"qpgen_math_{uuid.uuid4().hex}.svg"
+        )
+        fig.savefig(out, bbox_inches="tight", pad_inches=0.02, transparent=True)
+        plt.close(fig)
         return out
     except Exception:
         try:
@@ -174,9 +198,9 @@ def _math_img_tag(png_path: str) -> str:
         from PIL import Image as PILImage  # noqa: PLC0415
         with PILImage.open(png_path) as pim:
             pw, ph = pim.size
-        # PNG is at 220 dpi from matplotlib (1 pt = 220/72 px).
-        natural_h_pt = (ph / 220.0) * 72.0
-        natural_w_pt = (pw / 220.0) * 72.0
+        # PNG is at 600 dpi from matplotlib (1 pt = 600/72 px).
+        natural_h_pt = (ph / 600.0) * 72.0
+        natural_w_pt = (pw / 600.0) * 72.0
         # Cap height at 18pt so giant fractions don't blow up the line spacing.
         max_h = 18.0
         if natural_h_pt > max_h:

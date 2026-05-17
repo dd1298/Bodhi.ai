@@ -227,15 +227,128 @@ def qpaper_extract_prompt(text_excerpt: str) -> str:
     return (
         "Extract every question you can find in the following question-paper text. "
         "For each question, return its full text, your best guess of marks (integer, "
-        "default 2), type (one of information|concept|application), and difficulty "
-        "(easy|medium|hard).\n\n"
+        "default 2), type (one of information|concept|application), difficulty "
+        "(easy|medium|hard), and 'topic' (a short 2-5 word topic label inferred "
+        "from the question content — e.g. 'Newton's Laws', 'Quadratic Equations').\n\n"
         "Return ONLY strict JSON:\n"
         "{\n"
         '  "subject": "best guess of subject or empty",\n'
         '  "class_name": "best guess of class or empty",\n'
-        '  "questions": [ { "question": "...", "marks": 2, "type": "concept", "difficulty": "medium" } ]\n'
+        '  "questions": [ { "question": "...", "marks": 2, "type": "concept", '
+        '"difficulty": "medium", "topic": "Topic name" } ]\n'
         "}\n\n"
         f"=== PAPER TEXT ===\n{text_excerpt}\n=== END ==="
+    )
+
+
+COMPETITIVE_QGEN_SYSTEM = (
+    "You design ORIGINAL practice questions for competitive exams. You are given "
+    "anchor samples retrieved from past papers of the SAME exam — use them ONLY "
+    "to calibrate style, depth and difficulty (Easy/Medium/Hard). Never copy."
+)
+
+
+def competitive_qgen_prompt(
+    exam_name: str,
+    topics: list[str],
+    difficulty: str,
+    question_count: int,
+    duration: int,
+    anchors: list[dict],
+    rag_dist: dict,
+    format_distribution: dict | None = None,
+    custom_instructions: str = "",
+) -> str:
+    """RAG-calibrated competitive-exam paper prompt.
+
+    `anchors` is a list of {text, difficulty, topic, marks, _score} retrieved
+    from past_questions. `rag_dist` is the easy/medium/hard distribution
+    actually observed across the anchors — the prompt hands this to the LLM
+    as a calibration anchor for what *real* Easy/Medium/Hard looks like for
+    this exam, rather than a generic notion of difficulty."""
+    anchor_lines = []
+    for i, a in enumerate(anchors[:8]):
+        diff = (a.get("difficulty") or "medium").lower()
+        tpc = a.get("topic") or ""
+        marks = a.get("marks") or ""
+        text = (a.get("text") or "").strip().replace("\n", " ")[:280]
+        anchor_lines.append(
+            f"[{i+1}] difficulty={diff} topic={tpc} marks={marks}\n    {text}"
+        )
+    anchors_block = "\n".join(anchor_lines) or "(none — no past papers indexed yet)"
+
+    rag_summary = (
+        f"Past-paper sample distribution for these topics: "
+        f"easy={rag_dist.get('easy',0)}, medium={rag_dist.get('medium',0)}, "
+        f"hard={rag_dist.get('hard',0)}.\n"
+    )
+
+    format_block = ""
+    if format_distribution:
+        fmt_lines = []
+        for fmt, pct in format_distribution.items():
+            if pct <= 0:
+                continue
+            n = max(1, round(question_count * pct / 100))
+            fmt_lines.append(f"- {fmt}: ~{n} ({pct}%)")
+        if fmt_lines:
+            format_block = (
+                "QUESTION FORMAT MIX (mandatory, set 'format' on each question):\n"
+                + "\n".join(fmt_lines)
+                + "\nFor 'mcq', emit options:[4 strings] and correct_option:0-3 "
+                "as SEPARATE JSON fields (NOT inlined into the question text).\n\n"
+            )
+
+    custom_block = ""
+    if custom_instructions.strip():
+        custom_block = (
+            "TEACHER'S ADDITIONAL INSTRUCTIONS (HIGHEST PRIORITY — override "
+            "defaults where they conflict):\n"
+            f"{custom_instructions.strip()}\n\n"
+        )
+
+    topics_block = "\n".join(f"- {t}" for t in topics)
+    return (
+        f"Generate an ORIGINAL practice paper for the {exam_name} competitive exam.\n"
+        f"Target difficulty: {difficulty}. Target question count: {question_count}. "
+        f"Duration: {duration} minutes.\n\n"
+        f"Topics to cover:\n{topics_block}\n\n"
+        "DIFFICULTY CALIBRATION (mandatory):\n"
+        f"{rag_summary}"
+        "Use the anchor samples below as your concrete reference for what "
+        "Easy/Medium/Hard looks like FOR THIS EXAM — they came from real past "
+        "papers retrieved by topic similarity. Match their depth and style. "
+        "If the target difficulty is 'medium', anchor primarily on items "
+        "labelled medium; for 'hard' anchor on hard, etc. NEVER copy any "
+        "anchor verbatim — produce ORIGINAL questions only.\n\n"
+        f"=== RAG ANCHORS ({len(anchor_lines)} items) ===\n{anchors_block}\n=== END ===\n\n"
+        f"{format_block}"
+        f"{custom_block}"
+        "MATH FORMATTING (STRICT): wrap every math expression in '$...$' "
+        "(inline) or '$$...$$' (block). Use KaTeX/matplotlib-mathtext "
+        "compatible LaTeX. No raw Unicode superscripts, subscripts or '°'.\n\n"
+        "Return ONLY strict JSON of the form:\n"
+        "{\n"
+        '  "instructions": "short instruction line",\n'
+        '  "sections": [\n'
+        '    { "title": "Section A",\n'
+        '      "questions": [\n'
+        '        { "question": "...", "topic": "Topic name",\n'
+        '          "type": "information|concept|application",\n'
+        '          "format": "mcq|short_answer|long_answer|fill_blank|true_false|\\"\\"",\n'
+        '          "difficulty": "easy|medium|hard", "marks": 1,\n'
+        '          "needs_diagram": false,\n'
+        '          "options": ["A","B","C","D"], "correct_option": 0 }\n'
+        '      ]\n'
+        '    }, ...\n'
+        "  ]\n"
+        "}\n\n"
+        "STRICT RULES:\n"
+        "- Originally phrased, never copy anchor wording.\n"
+        "- Stay on the listed topics.\n"
+        "- For format='mcq', options MUST be 4 plain strings and correct_option in [0,3].\n"
+        "- Sum of marks should approximate question_count * average mark-per-question of anchors (default 1 mark each if unsure).\n"
+        "- No markdown formatting in any field. No prose outside JSON.\n"
     )
 
 

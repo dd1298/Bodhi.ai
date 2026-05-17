@@ -1,0 +1,54 @@
+{
+  "summary": "Iteration 6: Phase 2 Competitive Exam library + RAG + Phase 3 600 dpi PDF. Backend 15/15 pytest pass (auth/list visibility/get-with-counts/RAG preview/upload-ingest-delete/generate-RAG-paper/PDF render/regression). Frontend full E2E green: teacher Header shows nav-competitive, /competitive-exams page lists + creates exams, /competitive-exams/{id} detail shows 7 topic pills + all upload/RAG/generate testids, Preview RAG anchors returns 'Kinematics' anchors card (easy 2 medium 0 hard 0), Generate kicks off and navigates to /papers/{id} (paper f4145d21 generated successfully). Student does NOT see nav-competitive and lands on /student. Phase 3 600-dpi PDF rendered for the freshly RAG-generated paper (200 OK, application/pdf, >5KB). Existing teacher regression (admin/overview, textbooks) still green.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "tests_executed": {
+    "TestExamCRUD::test_student_cannot_create": "PASS (403)",
+    "TestExamCRUD::test_teacher_create_returns_id_name_shared": "PASS",
+    "TestExamCRUD::test_get_exam_has_topic_and_difficulty_counts_and_papers": "PASS (topic_counts + difficulty_counts dict + papers[] + >=10 indexed)",
+    "TestExamCRUD::test_list_student_only_sees_shared": "PASS (every returned exam is_shared=true)",
+    "TestExamCRUD::test_list_teacher_sees_own_plus_shared": "PASS",
+    "TestExamCRUD::test_list_admin_sees_all": "PASS",
+    "TestRAGPreview::test_projectile_motion_returns_anchors": "PASS (>=2 anchors, sorted desc by _score, projectile-tagged present)",
+    "TestRAGPreview::test_student_403": "PASS",
+    "TestPastPaperLifecycle::test_upload_returns_ingesting_then_delete_decrements": "PASS (ingesting -> terminal status reached; delete tombstones)",
+    "TestPastPaperLifecycle::test_student_cannot_upload": "PASS (403)",
+    "TestGeneratePaper::test_generate_kicks_off_and_reaches_ready": "PASS (pending->ready ~30s; is_competitive=true, competitive_exam_id set, rag_anchors_used>0, rag_difficulty_distribution present, MCQs with 4 options + valid correct_option 0-3)",
+    "TestGeneratePaper::test_pdf_renders_for_competitive_paper": "PASS (200, application/pdf, >5KB at 600 dpi)",
+    "TestGeneratePaper::test_exam_id_mismatch_400": "PASS",
+    "TestRegression::test_admin_overview": "PASS",
+    "TestRegression::test_textbooks": "PASS"
+  },
+  "frontend_smoke_passed": {
+    "teacher_nav_competitive": "present",
+    "competitive_exams_page": "loaded with new-exam-form (name/description/shared/submit testids)",
+    "create_exam": "exam cards count went from 2 -> 3 after submit",
+    "competitive_exam_detail": "loaded for seeded JEE Main Test; back-to-exams + upload-past-paper-form + past-paper-file-input + past-paper-upload-submit + past-papers-list + comp-rag-preview-btn + comp-generate-btn + comp-diff-medium + comp-question-count + comp-duration + comp-custom-prompt all present",
+    "topic_pills": "7 pills rendered from seeded topic histogram",
+    "rag_preview_card": "shows anchors with difficulty distribution and per-anchor [difficulty] + text snippet",
+    "generate_navigates_to_paper": "Generate click -> /papers/f4145d21-747c-45d0-a412-70f737da0504",
+    "student_nav_competitive_absent": "confirmed False on student login (student.smoke.1779011398) -> lands on /student"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_competitive_exams.py",
+    "/app/test_reports/pytest/competitive_exams.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "MINOR (perf): competitive_routes.py _generate_competitive_paper() calls _retrieve_anchors() THREE times at write time (once before LLM, then twice again inside the $set for rag_anchors_used + rag_difficulty_distribution). Trivially reuse the original `anchors` and `rag_dist` to avoid 2 extra Mongo+TF-IDF passes per generated paper.",
+    "MINOR (bug surface): rag-preview anchors include the raw `_score` float — exposing internal scoring is fine for the teacher UI but consider rounding to 3 decimals to avoid floats like 0.4274938... leaking through.",
+    "MINOR (correctness): _ingest_past_paper() caps to first 6 chunks of 6000 chars (≈36KB of text). For long JEE/NEET papers this silently drops later questions. Consider parametrizing or surfacing a warning in past_paper.error when chunks were truncated.",
+    "MINOR (typo): CompetitiveExams.jsx imports `Books` from @phosphor-icons/react — the icon is named `Books` in Phosphor v2+; verify it isn't `BookOpen`/`BooksLight` in your installed version (currently rendering fine, just flag if upgrade breaks).",
+    "INFO: rag.py top_k_similar() correctly vectorizes topic+text and falls back to lexical overlap on tiny corpora — solid MVP.",
+    "INFO: 600 dpi math render is confirmed visually crisp + PDF generation under 5s for a 6-question paper. No memory blowup observed.",
+    "INFO: All routes properly guarded — student 403 on POST /api/competitive-exams, POST /papers/upload, GET /rag-preview, POST /generate-paper. GET list correctly filters by is_shared for students."
+  ],
+  "updated_files": ["/app/backend/tests/test_competitive_exams.py (new)"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% (all testids + RAG preview + generate flow + role-aware header)"},
+  "test_credentials": "Admin admin@bodhi.ai/admin123; Teacher pdftest@t.com/pass123; Student student.smoke.1779011398@example.com/pass123",
+  "seed_data_creation": "Pytest creates one TEST_Exam_<hex> exam, one TEST_paper.pdf past-paper (ingested+deleted within the test), and one TEST_RAG_<hex> generated paper per run. UI smoke also created one TEST_UI_<ts> exam under the teacher.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend suite at /app/backend/tests/test_competitive_exams.py; relies on seeded exam id a1392323-74fe-4139-8d4e-cd53be029e19 'JEE Main Test' with ~10 past_questions. UI flow: teacher login -> nav-competitive -> /competitive-exams (new-exam-form) -> exam card -> /competitive-exams/{id} (upload-past-paper-form + topic-pill-* + comp-rag-preview-btn -> rag-preview-card; comp-generate-btn -> navigates /papers/{id}). Student must NOT see nav-competitive. Existing Phase 1 student MVP suite still green.",
+  "rca_of_the_issue": "No bugs. Phase 2 + Phase 3 both pass end-to-end on first run."
+}

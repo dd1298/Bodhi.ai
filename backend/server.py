@@ -43,6 +43,7 @@ from workers import (
     load_paper_feedback_hints,
 )
 import student_routes  # noqa: F401  registers /api/student/* endpoints
+import competitive_routes  # noqa: F401  registers /api/competitive-exams/* endpoints
 
 
 # =========================================================

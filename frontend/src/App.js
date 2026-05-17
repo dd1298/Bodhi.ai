@@ -21,6 +21,8 @@ import StudentDashboard from "@/pages/student/StudentDashboard";
 import NewMockTest from "@/pages/student/NewMockTest";
 import MockTestExam from "@/pages/student/MockTestExam";
 import MockTestResult from "@/pages/student/MockTestResult";
+import CompetitiveExams from "@/pages/CompetitiveExams";
+import CompetitiveExamDetail from "@/pages/CompetitiveExamDetail";
 
 function App() {
   return (
@@ -128,6 +130,22 @@ function App() {
                 <StudentRoute>
                   <MockTestResult />
                 </StudentRoute>
+              }
+            />
+            <Route
+              path="/competitive-exams"
+              element={
+                <ProtectedRoute>
+                  <CompetitiveExams />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/competitive-exams/:id"
+              element={
+                <ProtectedRoute>
+                  <CompetitiveExamDetail />
+                </ProtectedRoute>
               }
             />
           </Routes>
