@@ -284,6 +284,8 @@ async def _retrieve_anchors(exam_id: str, topics: list[str], k_per_topic: int = 
 
 async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperRequest, user_id: str) -> None:
     """Background task that builds + writes a competitive paper using RAG."""
+    anchors: list = []
+    rag_dist: dict = {"easy": 0, "medium": 0, "hard": 0}
     try:
         exam = await db.competitive_exams.find_one({"id": req.exam_id}, {"_id": 0})
         if not exam:
@@ -350,8 +352,8 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             "diagrams_pending": 0,
             "generation_status": "ready",
             "generation_error": None,
-            "rag_anchors_used": len(await _retrieve_anchors(req.exam_id, req.topics)),
-            "rag_difficulty_distribution": difficulty_distribution(await _retrieve_anchors(req.exam_id, req.topics)),
+            "rag_anchors_used": len(anchors),
+            "rag_difficulty_distribution": rag_dist,
         }},
     )
 

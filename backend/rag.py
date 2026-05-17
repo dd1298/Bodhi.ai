@@ -78,7 +78,7 @@ def top_k_similar(
     for i in order:
         if sims[i] <= 0:
             continue
-        item = {**corpus[int(i)], "_score": float(sims[i])}
+        item = {**corpus[int(i)], "_score": round(float(sims[i]), 3)}
         out.append(item)
     return out
 
