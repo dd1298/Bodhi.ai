@@ -26,6 +26,16 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Provider fallback chain for LLMs
 - PDF export of the generated paper
 
+## What's Implemented — 2026-05-17 (Phase 1 Student MVP)
+- **Student persona end-to-end.** Register flow now offers `teacher | student | admin`. Backend allows `role=student` on `/api/auth/register`. Frontend Header is role-aware; `/` redirects students to `/student` via `TeacherOrRedirect`; `/student/*` is gated by `StudentRoute`.
+- **Mock-test backend** (`/app/backend/student_routes.py`): 7 endpoints under `/api/student/*` for the full lifecycle — list shared textbooks, create mock test (kicks off existing paper-generation worker with `format_distribution={mcq:100}`), fetch test (hides `correct_option` until submitted), start (sets `ends_at`), autosave answers, submit + auto-grade, fetch result. New `mock_tests` collection. Correct-option leakage is prevented in the in-progress state (defense-in-depth — also strips `diagram_description`).
+- **Structured MCQs.** `prompts.py` + `workers.py` updated so MCQs emit `options:[4 strings]` and `correct_option:0-3` as separate JSON fields (not inlined). `pdf_utils.render_paper_pdf` now renders MCQ options on indented `(a)/(b)/(c)/(d)` lines for teacher PDFs.
+- **MCQ auto-grader** in `student_routes._grade_test`: marks awarded only for matching `selected_option`, with topic-wise breakdown (`obtained/total/correct/count` per topic) and overall percent. Non-MCQ items are counted toward `total` but never awarded — fine because mock tests are 100% MCQ.
+- **Exam UI** (`/app/frontend/src/pages/student/MockTestExam.jsx`): server-time-driven countdown (no clock drift), batched autosave every 3s of dirty answers, automatic submit at 0s, question navigator sidebar, KaTeX in question/option rendering. Mobile-responsive grid.
+- **Result UI** with overall percent, topic breakdown bars, weak-topic detection (<50%) + one-click practice-drill generation, per-question review with green/red highlighting on correct/picked options.
+- **Orphan recovery on startup** (added earlier today) still in place so interrupted mock-test generations also auto-recover.
+- Verified via `testing_agent_v3_fork` → iteration_5.json: backend 13/13 pass + teacher regression green (PDF download, admin overview), frontend full E2E green (register/login/redirect/route-guards/new-mock-test/exam/submit/result/practice-drill).
+
 ## What's Implemented — 2026-02-15 (PDF math sizing fix)
 - `pdf_utils._math_to_paragraph_html` now routes inline + block math through the new `_math_img_tag()` helper that opens each rendered LaTeX PNG with PIL, computes its natural width/height at 220 dpi, caps height at 18pt for stacked expressions, and emits a proportional `<img width=... height=... valign="-1">` tag. Eliminates the "bumpy line / oversized equation" issue users reported in downloaded PDFs. Verified via `/app/backend/tests/test_pdf_math.py` (inline F=ma renders at ~12pt, fraction caps at 18pt, full paper PDF renders without errors, visual analysis confirmed proportional sizing).
 

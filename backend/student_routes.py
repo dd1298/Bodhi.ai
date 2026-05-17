@@ -409,9 +409,11 @@ async def mock_test_result(test_id: str, user: dict = Depends(get_current_user))
     # If the test expired without submit, grade now so the student still gets feedback.
     if t["status"] == "expired" and not t.get("score") and paper:
         score = _grade_test(paper, t.get("answers") or {})
+        now = utcnow_iso()
         await db.mock_tests.update_one(
-            {"id": test_id}, {"$set": {"score": score}}
+            {"id": test_id}, {"$set": {"score": score, "submitted_at": now}}
         )
         t["score"] = score
+        t["submitted_at"] = now
     t["paper"] = paper
     return t
