@@ -101,8 +101,11 @@ def qgen_prompt(
                 "QUESTION FORMAT MIX (mandatory — set each question's 'format' field):\n"
                 + "\n".join(fmt_lines)
                 + "\nFormat conventions:\n"
-                "  - mcq: include 4 options labelled (a)-(d) within the question text "
-                "and end with 'Choose the correct option.'\n"
+                "  - mcq: do NOT inline options inside the 'question' text. Instead "
+                "emit a separate 'options' array of EXACTLY 4 plain-text choices and a "
+                "0-indexed 'correct_option' integer pointing to the right one. Example: "
+                '{"format":"mcq","question":"What is the SI unit of force?",'
+                '"options":["Newton","Pascal","Joule","Watt"],"correct_option":0}.\n'
                 "  - short_answer: 2-3 sentence answer expected.\n"
                 "  - long_answer: detailed multi-paragraph answer expected.\n"
                 "  - fill_blank: include one or more '_____' blanks in the question.\n"
@@ -190,7 +193,8 @@ def qgen_prompt(
         '      "questions": [\n'
         '        { "question": "...", "topic": "Topic name", "type": "information",\n'
         '          "format": "mcq|short_answer|long_answer|fill_blank|true_false|custom_label|\\"\\"",\n'
-        '          "difficulty": "easy|medium|hard", "marks": 1, "needs_diagram": false }\n'
+        '          "difficulty": "easy|medium|hard", "marks": 1, "needs_diagram": false,\n'
+        '          "options": ["A","B","C","D"], "correct_option": 0 }\n'
         '      ]\n'
         '    }, ...\n'
         "  ]\n"
@@ -201,6 +205,7 @@ def qgen_prompt(
         "- Stay strictly within the listed topics.\n"
         "- Set 'topic' field on every question to the matching topic name from the list above.\n"
         "- Set 'format' field on every question (use one of the provided format labels, or empty string if none specified).\n"
+        "- For format='mcq', 'options' MUST be an array of EXACTLY 4 plain strings, and 'correct_option' MUST be one of 0,1,2,3 pointing to the correct entry. Omit these fields for non-MCQ questions.\n"
         "- Ensure sum of marks of all questions equals the total marks.\n"
         "- At most 5 questions in the entire paper should have needs_diagram=true.\n"
         "- Do NOT use markdown formatting in any field. No '**bold**', no '*italic*', "

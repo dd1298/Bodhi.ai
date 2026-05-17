@@ -83,8 +83,8 @@ export default function Register() {
           </div>
           <div className="mb-6">
             <label className="qp-label">Role</label>
-            <div className="grid grid-cols-2 gap-0 border-2 border-black">
-              {["teacher", "admin"].map((r) => (
+            <div className="grid grid-cols-3 gap-0 border-2 border-black">
+              {["teacher", "student", "admin"].map((r, idx, arr) => (
                 <button
                   key={r}
                   type="button"
@@ -94,7 +94,7 @@ export default function Register() {
                     form.role === r
                       ? "bg-black text-white"
                       : "bg-white text-black hover:bg-neutral-100"
-                  } ${r === "teacher" ? "border-r-2 border-black" : ""}`}
+                  } ${idx < arr.length - 1 ? "border-r-2 border-black" : ""}`}
                 >
                   {r}
                 </button>

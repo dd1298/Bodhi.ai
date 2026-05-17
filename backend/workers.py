@@ -203,6 +203,23 @@ async def generate_paper_background(
             q.setdefault("difficulty", difficulty)
             q.setdefault("needs_diagram", False)
             q.setdefault("format", "")
+            # MCQ structured fields — keep options as a 4-string list and
+            # correct_option as a 0-3 int. Drop them for non-MCQ items.
+            if (q.get("format") or "").lower() == "mcq":
+                opts = q.get("options") or []
+                if isinstance(opts, list):
+                    opts = [str(o).strip() for o in opts][:4]
+                else:
+                    opts = []
+                q["options"] = opts
+                try:
+                    co = int(q.get("correct_option", 0))
+                except (TypeError, ValueError):
+                    co = 0
+                q["correct_option"] = co if 0 <= co < len(opts) else 0
+            else:
+                q.pop("options", None)
+                q.pop("correct_option", None)
 
     # Mark diagram jobs pending so the UI can show "generating" placeholders.
     pending_count = 0

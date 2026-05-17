@@ -33,7 +33,7 @@ export default function Header() {
     <header className="border-b-2 border-black bg-white sticky top-0 z-40">
       <div className="max-w-7xl mx-auto flex items-center justify-between px-6 py-4">
         <Link
-          to="/"
+          to={user?.role === "student" ? "/student" : "/"}
           data-testid="app-logo-link"
           className="flex items-center gap-3 group"
         >
@@ -51,12 +51,25 @@ export default function Header() {
         </Link>
 
         <nav className="hidden md:flex items-center gap-1">
-          <NavItem to="/" label="Dashboard" testid="nav-dashboard" />
-          <NavItem to="/textbooks" label="Textbooks" testid="nav-textbooks" />
-          <NavItem to="/papers/new" label="New Paper" testid="nav-new-paper" />
-          <NavItem to="/qbank" label="Question Bank" testid="nav-qbank" />
-          {user?.role === "admin" && (
-            <NavItem to="/admin" label="Admin" testid="nav-admin" />
+          {user?.role === "student" ? (
+            <>
+              <NavItem to="/student" label="My Tests" testid="nav-student-dashboard" />
+              <NavItem
+                to="/student/mock-tests/new"
+                label="New Mock Test"
+                testid="nav-new-mock-test"
+              />
+            </>
+          ) : (
+            <>
+              <NavItem to="/" label="Dashboard" testid="nav-dashboard" />
+              <NavItem to="/textbooks" label="Textbooks" testid="nav-textbooks" />
+              <NavItem to="/papers/new" label="New Paper" testid="nav-new-paper" />
+              <NavItem to="/qbank" label="Question Bank" testid="nav-qbank" />
+              {user?.role === "admin" && (
+                <NavItem to="/admin" label="Admin" testid="nav-admin" />
+              )}
+            </>
           )}
         </nav>
 

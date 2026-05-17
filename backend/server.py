@@ -42,6 +42,7 @@ from workers import (
     generate_solution_background,
     load_paper_feedback_hints,
 )
+import student_routes  # noqa: F401  registers /api/student/* endpoints
 
 
 # =========================================================
@@ -251,8 +252,8 @@ async def shutdown():
 # =========================================================
 @api_router.post("/auth/register", response_model=AuthResponse)
 async def register(data: RegisterInput):
-    if data.role not in ("teacher", "admin"):
-        raise HTTPException(status_code=400, detail="role must be teacher or admin")
+    if data.role not in ("teacher", "admin", "student"):
+        raise HTTPException(status_code=400, detail="role must be teacher, admin or student")
     existing = await db.users.find_one({"email": data.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")

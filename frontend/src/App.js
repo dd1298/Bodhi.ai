@@ -15,6 +15,12 @@ import SolutionView from "@/pages/SolutionView";
 import QBank from "@/pages/QBank";
 import Admin from "@/pages/Admin";
 import AdminRoute from "@/components/AdminRoute";
+import TeacherOrRedirect from "@/components/TeacherOrRedirect";
+import StudentRoute from "@/components/StudentRoute";
+import StudentDashboard from "@/pages/student/StudentDashboard";
+import NewMockTest from "@/pages/student/NewMockTest";
+import MockTestExam from "@/pages/student/MockTestExam";
+import MockTestResult from "@/pages/student/MockTestResult";
 
 function App() {
   return (
@@ -39,9 +45,9 @@ function App() {
             <Route
               path="/"
               element={
-                <ProtectedRoute>
+                <TeacherOrRedirect>
                   <Dashboard />
-                </ProtectedRoute>
+                </TeacherOrRedirect>
               }
             />
             <Route
@@ -90,6 +96,38 @@ function App() {
                 <AdminRoute>
                   <Admin />
                 </AdminRoute>
+              }
+            />
+            <Route
+              path="/student"
+              element={
+                <StudentRoute>
+                  <StudentDashboard />
+                </StudentRoute>
+              }
+            />
+            <Route
+              path="/student/mock-tests/new"
+              element={
+                <StudentRoute>
+                  <NewMockTest />
+                </StudentRoute>
+              }
+            />
+            <Route
+              path="/student/mock-tests/:id"
+              element={
+                <StudentRoute>
+                  <MockTestExam />
+                </StudentRoute>
+              }
+            />
+            <Route
+              path="/student/mock-tests/:id/result"
+              element={
+                <StudentRoute>
+                  <MockTestResult />
+                </StudentRoute>
               }
             />
           </Routes>

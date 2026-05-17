@@ -570,6 +570,20 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
                     q_style,
                 )
             )
+            # MCQ options — render as (a)/(b)/(c)/(d) on indented lines so the
+            # paper looks like a real MCQ paper instead of having options
+            # squashed inline with the stem.
+            if (q.get("format") or "").lower() == "mcq" and q.get("options"):
+                labels = ["(a)", "(b)", "(c)", "(d)"]
+                for idx, opt in enumerate(q["options"][:4]):
+                    label = labels[idx] if idx < len(labels) else f"({idx + 1})"
+                    opt_html = _math_to_paragraph_html(str(opt))
+                    story.append(
+                        Paragraph(
+                            f"&nbsp;&nbsp;&nbsp;&nbsp;<b>{label}</b> {opt_html}",
+                            q_style,
+                        )
+                    )
             tags = [t for t in [qtype, q.get("format", ""), difficulty] if t]
             if tags:
                 # Make format display human-friendly (snake_case -> spaces)
