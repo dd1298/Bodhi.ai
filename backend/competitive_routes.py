@@ -89,6 +89,8 @@ async def list_exams(user: dict = Depends(get_current_user)):
     else:
         q = {"is_deleted": False, "$or": [{"owner_id": user["id"]}, {"is_shared": True}]}
     rows = await db.competitive_exams.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+    for r in rows:
+        r.setdefault("exam_type", "GENERIC")
     return rows
 
 
@@ -99,6 +101,7 @@ async def get_exam(exam_id: str, user: dict = Depends(get_current_user)):
     )
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
+    exam.setdefault("exam_type", "GENERIC")
     if (
         not exam.get("is_shared")
         and exam.get("owner_id") != user["id"]
