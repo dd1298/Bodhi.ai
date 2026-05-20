@@ -1,0 +1,59 @@
+{
+  "summary": "Phase 2.5 per-exam model routing + 5 quick-start presets. Backend 13/14 pytest pass: exam_type persists & echoes back on POST + GET-single for all 6 codes (incl. case-insensitive 'jee_mains' → JEE_MAINS upper-cased). Seeded JEE_MAINS exam (d684ab45) generated a 3-q MCQ paper in <90s, reached generation_status=ready, exam_type=JEE_MAINS stamped on paper doc, rag_anchors_used + rag_difficulty_distribution populated, MCQ structure valid. Backend log confirms primary 'LLM success with openai/gpt-5.1' (the JEE_MAINS chain head). Regression green: admin/overview, /api/textbooks, /api/papers, /api/student/textbooks all 200. Frontend E2E: /competitive-exams shows quick-create-grid with all 5 preset-* buttons; new-exam-type <select> exposes the exact 6 options ['GENERIC','JEE_MAINS','JEE_ADV','CAT','UPSC','NEET']; clicking preset-NEET created a NEET library; list shows exam-type-NEET (×2) + exam-type-JEE_MAINS (×3) badges; detail-exam-type-JEE_MAINS and detail-exam-type-NEET render on respective detail pages.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/competitive-exams",
+        "issue": "Legacy exam docs created before Phase 2.5 (e.g. id 422ed801-c1d5-49d1-a7fd-5aac27b9b5cd) have no `exam_type` field in MongoDB, so the list endpoint returns rows WITHOUT that key. Spec says they should default to GENERIC. Fix: either (a) one-shot migration `db.competitive_exams.update_many({'exam_type':{'$exists':False}},{'$set':{'exam_type':'GENERIC'}})` in startup, or (b) normalise on read in list_exams/get_exam (`row.setdefault('exam_type','GENERIC')`). Frontend tolerates missing key (badge only renders when set & != GENERIC), but the API contract is technically violated."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "tests_executed": {
+    "TestExamTypeCRUD::test_create_persists_exam_type[JEE_MAINS|JEE_ADV|CAT|UPSC|NEET|GENERIC]": "PASS (6/6 — exam_type persisted, echoed in POST + GET-single)",
+    "TestExamTypeCRUD::test_list_contains_exam_type_field": "FAIL (legacy docs lack exam_type; see minor backend issue)",
+    "TestExamTypeCRUD::test_invalid_exam_type_normalises_or_falls_back": "PASS ('jee_mains' upper-cased to JEE_MAINS)",
+    "TestGenerateRoutesByExamType::test_seeded_jee_mains_generates_with_exam_type_stamped": "PASS (paper ready in ~16s, exam_type=JEE_MAINS, rag_anchors_used+rag_difficulty_distribution set, MCQ struct valid)",
+    "TestBackendLogPrimary::test_jee_mains_primary_was_gpt_5_1": "PASS ('LLM success with openai/gpt-5.1' present in backend log immediately after generation)",
+    "TestRegression::test_admin_overview": "PASS",
+    "TestRegression::test_textbooks_list": "PASS",
+    "TestRegression::test_papers_list": "PASS",
+    "TestRegression::test_student_section": "PASS"
+  },
+  "frontend_smoke_passed": {
+    "quick_create_grid_testid": "visible",
+    "preset_buttons": "all 5 testids (preset-JEE_MAINS / JEE_ADV / CAT / UPSC / NEET) visible & clickable",
+    "new_exam_type_select_options": "['GENERIC','JEE_MAINS','JEE_ADV','CAT','UPSC','NEET'] (exact match)",
+    "preset_NEET_click_creates_library": "PASS (badge count went from existing to +1 after reload)",
+    "list_card_exam_type_badges": "exam-type-NEET ×2, exam-type-JEE_MAINS ×3 rendered correctly; legacy/GENERIC cards correctly omit the badge",
+    "detail_exam_type_JEE_MAINS_badge": "present on /competitive-exams/d684ab45-2441-4563-a873-8ee935864b4b",
+    "detail_exam_type_NEET_badge": "present on freshly-created NEET preset detail page"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_exam_type_routing.py",
+    "/app/test_reports/pytest/exam_type_routing.xml"
+  ],
+  "action_items": [
+    "MINOR: default missing exam_type to 'GENERIC' on read in list_exams (and get_exam) OR run a one-shot migration. Pick whichever — frontend already tolerates, but API contract says default should be GENERIC."
+  ],
+  "critical_code_review_comments": [
+    "Per-exam routing implementation is clean: chain_for_exam() with .upper() lookup + safe PROVIDER_CHAIN fallback; competitive_system_for_exam() correctly layers the overlay on top of COMPETITIVE_QGEN_SYSTEM. _generate_competitive_paper() reads exam.exam_type ONCE up-front and passes both system + provider_chain into chat_complete — no double-fetch. Good.",
+    "JEE_ADV / UPSC / CAT / NEET primary models (o3-pro, claude-opus-4-6, gemini-3.1-pro-preview, claude-sonnet-4-5) were NOT live-tested end-to-end this run because each takes 30-90s of LLM time and a single JEE_MAINS run was sufficient to prove the routing dispatch logic works. Per playbook, fallback chains acceptable if primary 502/rate-limits — but for an end-to-end smoke on each, recommend a separate slow-suite the main agent can opt into.",
+    "PRESETS const in CompetitiveExams.jsx is the single source of truth for the 5 preset codes — drift risk if backend EXAM_PROVIDER_CHAINS or _EXAM_SYSTEM_OVERLAYS keys evolve. Consider exposing GET /api/competitive-exams/preset-codes that returns the supported list, and have the frontend render from that response.",
+    "Minor: PRESETS in CompetitiveExams.jsx pins year (2026) in the name. Will need a yearly bump.",
+    "INFO: legacy docs missing exam_type is the only behavioural gap from the spec — see action_item above."
+  ],
+  "updated_files": ["/app/backend/tests/test_exam_type_routing.py (new)"],
+  "success_rate": {"backend": "93% (13/14 — only failure is the legacy-doc default-to-GENERIC contract gap)", "frontend": "100% (all preset testids + select options + library/detail badges verified)"},
+  "test_credentials": "Teacher pdftest@t.com/pass123; Admin admin@bodhi.ai/admin123; Student student.smoke.1779011398@example.com/pass123",
+  "seed_data_creation": "Pytest creates 7 TEST_<type>_<n> exams under the teacher (one per preset + one GENERIC + one lowercase normalise check) and one ready competitive paper under the seeded JEE_MAINS exam (id d684ab45). UI smoke created one NEET 'NEET UG — PCB' library (id 15f9d55d-c94b-4f38-9831-7c9303bd8e97).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Per-exam routing dispatch is verified for JEE_MAINS (gpt-5.1 primary confirmed via backend log). JEE_ADV/UPSC/CAT/NEET primary chains were not live-end-to-end-tested due to per-call latency; routing is identical so they should work but if main agent fixes anything model-side, re-run /app/backend/tests/test_exam_type_routing.py and grep backend log for 'LLM success with anthropic/claude-opus-4-6' (UPSC), 'gemini/gemini-3.1-pro-preview' (CAT), 'anthropic/claude-sonnet-4-5-20250929' (NEET), 'openai/o3-pro' (JEE_ADV). Seeded JEE_MAINS exam id remains d684ab45-2441-4563-a873-8ee935864b4b with 3 past_questions.",
+  "rca_of_the_issue": "The one failing test (test_list_contains_exam_type_field) is NOT a regression of new code — it surfaces that ExamCreate added the field on writes but list_exams projects Mongo docs raw, so any legacy exam pre-Phase-2.5 returns without the key. Two-line fix: either migrate once or `for r in rows: r.setdefault('exam_type','GENERIC')` before return."
+}

@@ -22,13 +22,13 @@ from pydantic import BaseModel, Field
 
 from auth import get_current_user
 from deps import api_router, db, logger, utcnow_iso
-from llm_adapter import chat_complete, parse_json_response
+from llm_adapter import chain_for_exam, chat_complete, parse_json_response
 from pdf_utils import chunk_text, extract_text
 from prompts import (
     QPAPER_EXTRACT_SYSTEM,
     qpaper_extract_prompt,
     competitive_qgen_prompt,
-    COMPETITIVE_QGEN_SYSTEM,
+    competitive_system_for_exam,
 )
 from rag import top_k_similar, difficulty_distribution
 from storage import APP_NAME, put_object
@@ -41,6 +41,7 @@ class ExamCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=80)
     description: str = ""
     is_shared: bool = True
+    exam_type: str = "GENERIC"  # JEE_MAINS | JEE_ADV | CAT | UPSC | NEET | GENERIC
 
 
 class CompetitivePaperRequest(BaseModel):
@@ -67,6 +68,7 @@ async def create_exam(payload: ExamCreate, user: dict = Depends(get_current_user
         "name": payload.name.strip(),
         "description": payload.description.strip(),
         "is_shared": bool(payload.is_shared),
+        "exam_type": (payload.exam_type or "GENERIC").upper(),
         "owner_id": user["id"],
         "papers_count": 0,
         "questions_count": 0,
@@ -286,10 +288,12 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
     """Background task that builds + writes a competitive paper using RAG."""
     anchors: list = []
     rag_dist: dict = {"easy": 0, "medium": 0, "hard": 0}
+    exam_type = "GENERIC"
     try:
         exam = await db.competitive_exams.find_one({"id": req.exam_id}, {"_id": 0})
         if not exam:
             raise RuntimeError(f"exam {req.exam_id} missing")
+        exam_type = (exam.get("exam_type") or "GENERIC").upper()
         anchors = await _retrieve_anchors(req.exam_id, req.topics)
         rag_dist = difficulty_distribution(anchors)
         prompt = competitive_qgen_prompt(
@@ -302,9 +306,12 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             rag_dist=rag_dist,
             format_distribution=req.format_distribution,
             custom_instructions=req.custom_instructions,
+            exam_type=exam_type,
         )
         raw = await chat_complete(
-            system_message=COMPETITIVE_QGEN_SYSTEM, user_text=prompt
+            system_message=competitive_system_for_exam(exam_type),
+            user_text=prompt,
+            provider_chain=chain_for_exam(exam_type),
         )
         data = parse_json_response(raw)
     except Exception as e:  # noqa: BLE001
@@ -354,6 +361,7 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             "generation_error": None,
             "rag_anchors_used": len(anchors),
             "rag_difficulty_distribution": rag_dist,
+            "exam_type": exam_type,
         }},
     )
 

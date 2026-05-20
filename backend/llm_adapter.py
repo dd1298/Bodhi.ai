@@ -24,6 +24,45 @@ PROVIDER_CHAIN = [
     ("anthropic", "claude-sonnet-4-5-20250929"),
 ]
 
+# Per-task model routing for competitive-exam papers. The first provider is
+# tried first; subsequent ones are fallbacks (same retry behaviour as the
+# default chain). All models below are confirmed available through the
+# Emergent universal key (Feb 2026).
+EXAM_PROVIDER_CHAINS: dict[str, list[tuple[str, str]]] = {
+    "JEE_MAINS": [
+        ("openai", "gpt-5.1"),
+        ("openai", "gpt-5.2"),
+        ("anthropic", "claude-sonnet-4-5-20250929"),
+    ],
+    "JEE_ADV": [
+        ("openai", "o3-pro"),
+        ("openai", "gpt-5.1"),
+        ("anthropic", "claude-opus-4-6"),
+    ],
+    "UPSC": [
+        ("anthropic", "claude-opus-4-6"),
+        ("anthropic", "claude-sonnet-4-5-20250929"),
+        ("openai", "gpt-5.2"),
+    ],
+    "CAT": [
+        ("gemini", "gemini-3.1-pro-preview"),
+        ("openai", "gpt-5.2"),
+        ("anthropic", "claude-sonnet-4-5-20250929"),
+    ],
+    "NEET": [
+        ("anthropic", "claude-sonnet-4-5-20250929"),
+        ("gemini", "gemini-2.5-pro"),
+        ("openai", "gpt-5.2"),
+    ],
+}
+
+
+def chain_for_exam(exam_type: str | None) -> list[tuple[str, str]]:
+    """Return the provider chain for an exam_type, or the default chain."""
+    if not exam_type:
+        return PROVIDER_CHAIN
+    return EXAM_PROVIDER_CHAINS.get(exam_type.upper(), PROVIDER_CHAIN)
+
 DIAGRAM_MODEL = "gemini-3.1-flash-image-preview"
 
 # Exponential backoff settings for transient upstream errors.
@@ -63,13 +102,18 @@ def _is_transient(err: BaseException) -> bool:
     return any(marker in msg for marker in _TRANSIENT_MARKERS)
 
 
-async def chat_complete(system_message: str, user_text: str) -> str:
+async def chat_complete(
+    system_message: str,
+    user_text: str,
+    provider_chain: list[tuple[str, str]] | None = None,
+) -> str:
     """Run chat completion with retries-per-provider then fall through.
 
-    For each provider in PROVIDER_CHAIN we retry up to RETRY_MAX_ATTEMPTS
-    times on TRANSIENT upstream errors (502/503/504/timeout/rate-limit) with
-    exponential backoff. Non-transient errors (auth, budget, malformed) fail
-    fast and we move to the next provider.
+    Pass `provider_chain` to override the default OpenAI→Claude chain (e.g.
+    for competitive-exam-specific routing). For each provider we retry up
+    to RETRY_MAX_ATTEMPTS times on TRANSIENT upstream errors (502/503/504/
+    timeout/rate-limit) with exponential backoff. Non-transient errors
+    (auth, budget, malformed) fail fast and we move to the next provider.
 
     IMPORTANT: emergentintegrations.LlmChat.send_message() is declared `async`
     but internally calls the SYNC litellm.completion(...) which blocks for
@@ -81,8 +125,9 @@ async def chat_complete(system_message: str, user_text: str) -> str:
     PER_CALL_TIMEOUT = 75.0
     last_err: Exception | None = None
     loop = asyncio.get_running_loop()
+    chain = provider_chain or PROVIDER_CHAIN
 
-    for provider, model in PROVIDER_CHAIN:
+    for provider, model in chain:
         for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
             try:
                 session_id = f"bodhi-{uuid.uuid4()}"

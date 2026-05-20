@@ -248,6 +248,55 @@ COMPETITIVE_QGEN_SYSTEM = (
 )
 
 
+_EXAM_SYSTEM_OVERLAYS = {
+    "JEE_MAINS": (
+        "You are setting questions for JEE Main. Numerical answers must be exact "
+        "(2 or 3 significant figures). Use SI units. Apply real JEE Main weightage: "
+        "Physics — mechanics/electrodynamics/optics emphasis; Chemistry — physical, "
+        "organic name-reactions, inorganic blocks; Mathematics — calculus, "
+        "coordinate geometry, algebra. MCQ options must be plausible distractors "
+        "based on common student errors (sign flips, factor of 2, unit-swap)."
+    ),
+    "JEE_ADV": (
+        "You are setting questions for JEE Advanced. Demand multi-concept "
+        "reasoning, integrated 2-3 step derivations, and unit/dimension awareness. "
+        "Use the actual JEE Adv styles: 'single correct', 'one or more correct', "
+        "and numerical-answer types when allowed. Avoid trivially memorisable "
+        "items. Distractors must reflect plausible but wrong reasoning paths, "
+        "not random wrong values."
+    ),
+    "UPSC": (
+        "You are setting questions for the UPSC Civil Services examination. "
+        "Use Indian-government and current-affairs context where appropriate. "
+        "For GS/Essay prompts, demand structured, analytical, multi-perspective "
+        "responses (historical, economic, social, ethical lenses). Avoid yes/no "
+        "framing; favour 'critically examine', 'discuss', 'analyse' verbs."
+    ),
+    "CAT": (
+        "You are setting questions for CAT (IIM admissions). For LRDI build a "
+        "compact data set or scenario the student must reason over. For VARC "
+        "favour passage-based inference and assumption-detection. For QA stay "
+        "within high-school arithmetic/algebra/geometry but require multi-step "
+        "manipulation. MCQs follow CAT's 4-option format with strong, close "
+        "distractors."
+    ),
+    "NEET": (
+        "You are setting questions for NEET (UG). Stay strictly within the "
+        "NCERT Class 11-12 Biology / Physics / Chemistry syllabus. Use NCERT-style "
+        "diction. For Biology, anchor on classification, physiology, genetics, "
+        "ecology and human anatomy. MCQs use the standard 4-option format with "
+        "one definitively correct answer."
+    ),
+}
+
+
+def competitive_system_for_exam(exam_type: str | None) -> str:
+    """Layer the exam-specific overlay onto the base competitive system."""
+    base = COMPETITIVE_QGEN_SYSTEM
+    overlay = _EXAM_SYSTEM_OVERLAYS.get((exam_type or "").upper())
+    return f"{base}\n\n{overlay}" if overlay else base
+
+
 def competitive_qgen_prompt(
     exam_name: str,
     topics: list[str],
@@ -258,6 +307,7 @@ def competitive_qgen_prompt(
     rag_dist: dict,
     format_distribution: dict | None = None,
     custom_instructions: str = "",
+    exam_type: str = "GENERIC",
 ) -> str:
     """RAG-calibrated competitive-exam paper prompt.
 
@@ -309,7 +359,8 @@ def competitive_qgen_prompt(
 
     topics_block = "\n".join(f"- {t}" for t in topics)
     return (
-        f"Generate an ORIGINAL practice paper for the {exam_name} competitive exam.\n"
+        f"Generate an ORIGINAL practice paper for the {exam_name} competitive exam "
+        f"(exam_type={exam_type}).\n"
         f"Target difficulty: {difficulty}. Target question count: {question_count}. "
         f"Duration: {duration} minutes.\n\n"
         f"Topics to cover:\n{topics_block}\n\n"

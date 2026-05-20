@@ -176,6 +176,14 @@ export default function CompetitiveExamDetail() {
               <p className="text-neutral-600 mt-2">{exam.description}</p>
             )}
             <div className="text-xs text-neutral-500 mt-2">
+              {exam.exam_type && exam.exam_type !== "GENERIC" && (
+                <span
+                  className="mr-2 px-2 py-0.5 text-[10px] font-bold uppercase bg-black text-white"
+                  data-testid={`detail-exam-type-${exam.exam_type}`}
+                >
+                  {exam.exam_type.replace("_", " ")}
+                </span>
+              )}
               {exam.papers?.length || 0} past papers · {exam.questions_count || 0}{" "}
               questions indexed · difficulty distribution: easy{" "}
               {exam.difficulty_counts?.easy || 0} · medium{" "}

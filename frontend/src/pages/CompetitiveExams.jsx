@@ -8,13 +8,72 @@ import {
   Trophy,
   ArrowRight,
   Books,
+  Lightning,
 } from "@phosphor-icons/react";
+
+// Curated quick-start templates — one click to create a competitive exam
+// pre-tuned for the right model chain + system prompt overlay (backend side).
+const PRESETS = [
+  {
+    code: "JEE_MAINS",
+    name: "JEE Mains 2026",
+    description: "Physics, Chemistry, Maths — NTA pattern, MCQ + numerical.",
+    accent: "#002FA7",
+  },
+  {
+    code: "JEE_ADV",
+    name: "JEE Advanced 2026",
+    description: "Multi-concept reasoning, MCQ + numerical, IIT-level depth.",
+    accent: "#7C3AED",
+  },
+  {
+    code: "CAT",
+    name: "CAT 2026 — IIM",
+    description: "LRDI, VARC, QA — long-context passage + reasoning.",
+    accent: "#0891B2",
+  },
+  {
+    code: "UPSC",
+    name: "UPSC CSE — GS",
+    description: "Analytical GS questions in 'discuss / critically examine' format.",
+    accent: "#B45309",
+  },
+  {
+    code: "NEET",
+    name: "NEET UG — PCB",
+    description: "Strictly NCERT-anchored Biology, Physics, Chemistry MCQs.",
+    accent: "#15803D",
+  },
+];
 
 export default function CompetitiveExams() {
   const [exams, setExams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", is_shared: true });
+  const [form, setForm] = useState({
+    name: "",
+    description: "",
+    is_shared: true,
+    exam_type: "GENERIC",
+  });
+
+  const quickCreate = async (preset) => {
+    setCreating(true);
+    try {
+      await api.post("/competitive-exams", {
+        name: preset.name,
+        description: preset.description,
+        is_shared: true,
+        exam_type: preset.code,
+      });
+      toast.success(`${preset.name} library created`);
+      load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not create exam");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const load = async () => {
     try {
@@ -36,7 +95,7 @@ export default function CompetitiveExams() {
     try {
       await api.post("/competitive-exams", form);
       toast.success("Exam created");
-      setForm({ name: "", description: "", is_shared: true });
+      setForm({ name: "", description: "", is_shared: true, exam_type: "GENERIC" });
       load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Could not create exam");
@@ -63,6 +122,45 @@ export default function CompetitiveExams() {
           </div>
         </div>
 
+        <div
+          className="border-2 border-black bg-white p-5 mb-8 hard-shadow-static"
+          data-testid="quick-create-grid"
+        >
+          <div className="flex items-center gap-2 mb-3">
+            <Lightning size={20} weight="fill" className="text-[#FFC300]" />
+            <h2 className="font-display text-2xl">Quick-start exam libraries</h2>
+          </div>
+          <p className="text-sm text-neutral-600 mb-4">
+            One click creates a pre-tuned library: each preset routes to the
+            model best suited for that exam (e.g. JEE Adv → o3-pro, UPSC →
+            Claude Opus 4.6, CAT → Gemini 3.1 Pro) and uses an exam-specific
+            system prompt overlay.
+          </p>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {PRESETS.map((p) => (
+              <button
+                key={p.code}
+                onClick={() => quickCreate(p)}
+                disabled={creating}
+                data-testid={`preset-${p.code}`}
+                className="text-left border-2 border-black p-4 bg-white hover:bg-neutral-50 transition-colors disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{ background: p.accent }}
+                  />
+                  <span className="font-display text-lg leading-tight">{p.name}</span>
+                </div>
+                <div className="text-xs text-neutral-600">{p.description}</div>
+                <div className="overline mt-2 text-[10px] text-neutral-500">
+                  {p.code.replace("_", " ")}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="grid lg:grid-cols-[1fr_360px] gap-6">
           <div>
             <div className="overline text-neutral-500 mb-3">// YOUR LIBRARY</div>
@@ -86,9 +184,17 @@ export default function CompetitiveExams() {
                   >
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div>
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <Trophy size={18} weight="fill" className="text-[#FFC300]" />
                           <h3 className="font-display text-2xl leading-tight">{e.name}</h3>
+                          {e.exam_type && e.exam_type !== "GENERIC" && (
+                            <span
+                              className="px-2 py-0.5 text-[10px] font-bold uppercase bg-black text-white"
+                              data-testid={`exam-type-${e.exam_type}`}
+                            >
+                              {e.exam_type.replace("_", " ")}
+                            </span>
+                          )}
                           {e.is_shared && (
                             <span className="px-2 py-0.5 text-[10px] font-bold uppercase bg-[#EEF2FF] text-[#002FA7]">
                               Shared
@@ -139,6 +245,22 @@ export default function CompetitiveExams() {
                   placeholder="Physics + Chemistry + Maths…"
                   data-testid="new-exam-description"
                 />
+              </div>
+              <div className="mb-3">
+                <label className="qp-label">Exam type</label>
+                <select
+                  value={form.exam_type}
+                  onChange={(e) => setForm({ ...form, exam_type: e.target.value })}
+                  className="qp-input"
+                  data-testid="new-exam-type"
+                >
+                  <option value="GENERIC">Generic (default model chain)</option>
+                  <option value="JEE_MAINS">JEE Mains</option>
+                  <option value="JEE_ADV">JEE Advanced</option>
+                  <option value="CAT">CAT (IIM)</option>
+                  <option value="UPSC">UPSC CSE</option>
+                  <option value="NEET">NEET UG</option>
+                </select>
               </div>
               <label className="flex items-center gap-2 text-sm mb-4">
                 <input
