@@ -404,7 +404,7 @@ def _strip_boilerplate(text: str) -> str:
     return "\n".join(out)
 
 
-def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 30, dpi: int = 200) -> str:
+def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
     """Run Tesseract OCR on a scanned / image-based PDF. Processes up to
     max_pages pages to keep latency bounded — enough for topic extraction."""
     try:
@@ -427,6 +427,43 @@ def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 30, dpi: int = 200) -> str:
     return "\n\n".join(p for p in pieces if p.strip())
 
 
+def _looks_like_metadata_only(text: str) -> bool:
+    """Detect NTA-style PDFs where pypdf only pulls metadata (Question Number,
+    Question Id, Question Type, Options: labels) while the actual question
+    stems and option choices are rendered as page images. Heuristic: many
+    'Question Number' markers but after stripping known NTA metadata fields
+    the gap between consecutive question markers averages <80 chars (no real
+    question prose between them)."""
+    import re as _re
+    matches = list(_re.finditer(r"Question Number\s*:\s*\d+", text))
+    if len(matches) < 5:
+        return False
+    # Patterns we strip before measuring real-prose density. Each represents
+    # one NTA "header" line that wraps the actual (image-only) question body.
+    metadata_re = _re.compile(
+        r"Question (?:Id|Type|Number) :\s*\S+|"
+        r"Option (?:Shuffling|Orientation) :\s*\S+|"
+        r"Display Question Number :\s*\S+|"
+        r"IsQuestion Mandatory :\s*\S+|"
+        r"Single Line Question Option :\s*\S+|"
+        r"Options? :|"
+        r"^\s*\d{4,}\.\s*$|"  # option numeric IDs on their own line
+        r"Correct Answer.*?$|"
+        r"Selected Option :.*?$|"
+        r"Time Taken.*?$|"
+        r"Status :.*?$",
+        _re.MULTILINE,
+    )
+    leftover_total = 0
+    for i in range(len(matches) - 1):
+        gap = text[matches[i].end() : matches[i + 1].start()]
+        stripped = metadata_re.sub("", gap).strip()
+        # Collapse whitespace so blank-line spam doesn't inflate the count.
+        leftover_total += len(_re.sub(r"\s+", " ", stripped))
+    avg_leftover = leftover_total / max(1, len(matches) - 1)
+    return avg_leftover < 80
+
+
 def extract_text(pdf_bytes: bytes, allow_ocr: bool = True) -> str:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     pieces: List[str] = []
@@ -440,11 +477,16 @@ def extract_text(pdf_bytes: bytes, allow_ocr: bool = True) -> str:
     raw = "\n\n".join(pieces)
     cleaned = _strip_boilerplate(raw)
 
-    # If the text layer yielded almost nothing (scanned / image-based PDF),
-    # fall back to OCR for the first N pages. This is enough for topic
-    # extraction which only uses the first few chunks anyway.
-    if allow_ocr and len(cleaned.strip()) < 500:
-        ocr_text = _ocr_pdf(pdf_bytes)
+    # OCR fallback in two cases:
+    #   1. Almost nothing was extracted (truly scanned/image PDF).
+    #   2. Text contains lots of "Question Number :" markers but no real prose
+    #      between them — i.e. an NTA PDF where questions are page images.
+    needs_ocr = (
+        allow_ocr
+        and (len(cleaned.strip()) < 500 or _looks_like_metadata_only(cleaned))
+    )
+    if needs_ocr:
+        ocr_text = _ocr_pdf(pdf_bytes, max_pages=40)
         if ocr_text.strip():
             return _strip_boilerplate(ocr_text)
     return cleaned

@@ -226,6 +226,13 @@ QPAPER_EXTRACT_SYSTEM = (
 def qpaper_extract_prompt(text_excerpt: str) -> str:
     return (
         "Extract every question you can find in the following question-paper text. "
+        "The text was extracted from a PDF (often via OCR), so it may include "
+        "noisy markers like 'Question Number : N', 'Question Id : XXX', "
+        "'Question Type : MCQ', 'Options :' and option numeric IDs like '6911215.' "
+        "— IGNORE these wrapper lines and only capture the actual question prose. "
+        "OCR may also produce minor character glitches in math (e.g. 'a, B €' for "
+        "'α, β ∈', '—' for '−'); reconstruct the cleanest plausible question text "
+        "without inventing content.\n\n"
         "For each question, return its full text, your best guess of marks (integer, "
         "default 2), type (one of information|concept|application), difficulty "
         "(easy|medium|hard), and 'topic' (a short 2-5 word topic label inferred "
