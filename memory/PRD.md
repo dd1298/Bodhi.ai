@@ -26,6 +26,11 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Provider fallback chain for LLMs
 - PDF export of the generated paper
 
+## What's Implemented — 2026-05-21 (PaperView MCQ-options rendering)
+- **Root cause:** Although the underlying JEE Mains data correctly had 4 options + correct_option on every question, `PaperView.jsx` only rendered the question text + marks; the options array was never displayed. The PDF download already rendered options (added earlier this session), but on-screen the paper looked option-less.
+- **Fix:** Added MCQ option rendering to `PaperView.jsx` in both view and edit modes. In view mode, options appear under the question on indented `(a)/(b)/(c)/(d)` lines with KaTeX math, the correct option highlighted in green with a screen-only "Correct" badge (`no-print` class so it's stripped from print/PDF). In edit mode, each option becomes an editable text input with a clickable `(a/b/c/d)` button that toggles which option is the correct answer; the change persists through the existing `update_paper` endpoint (since `SectionUpdate.questions: List[dict]` already accepts arbitrary keys).
+- **Verified:** Live screenshot of the JEE Mains 100% MCQ paper shows Q1 with options 1.0s / 2.0s / 1.5s / 2.5s and 2.0s flagged "Correct". PDF text extraction confirms each downloaded question carries its 4 options without the "Correct" badge — exactly the NTA paper format.
+
 ## What's Implemented — 2026-05-21 (All competitive papers now 4-option MCQ)
 - **Root cause:** User reported "JEE Mains pattern should have 4 options for each question" — but the locked JEE Mains format was 80% MCQ + 20% numerical (matching NTA's real exam), so 20% of generated questions intentionally had no options. Same issue applied to JEE Adv (30% numerical) and CAT (25% TITA).
 - **Fix:** Locked formats for `JEE_MAINS`, `JEE_ADV`, and `CAT` switched to `{mcq: 100}` in `exam_formats.py`. Practice papers in Bodhi.ai now use 100% 4-option MCQ across every preset (UPSC and NEET were already 100% MCQ). Numerical-style problems are wrapped as MCQs with 4 plausible distractors (correct value + 3 common-error variants).

@@ -561,6 +561,54 @@ export default function PaperView() {
                             data-testid={`edit-q-marks-${q.id}`}
                           />
                         </div>
+                        {(q.format || "").toLowerCase() === "mcq" &&
+                          Array.isArray(q.options) &&
+                          q.options.length > 0 && (
+                            <div className="mt-3 pl-6 space-y-1.5">
+                              <div className="overline text-neutral-500">
+                                // MCQ OPTIONS — pick the correct one
+                              </div>
+                              {q.options.slice(0, 4).map((opt, oi) => {
+                                const label = ["(a)", "(b)", "(c)", "(d)"][oi] || `(${oi + 1})`;
+                                const isCorrect = Number(q.correct_option) === oi;
+                                return (
+                                  <div
+                                    key={oi}
+                                    className="flex items-center gap-2"
+                                    data-testid={`edit-q-option-${q.id}-${oi}`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateQ(si, qi, { correct_option: oi })
+                                      }
+                                      data-testid={`edit-q-correct-${q.id}-${oi}`}
+                                      className={`w-7 h-7 border-2 text-xs font-bold shrink-0 ${
+                                        isCorrect
+                                          ? "border-green-700 bg-green-700 text-white"
+                                          : "border-black bg-white"
+                                      }`}
+                                      title="Mark as correct answer"
+                                    >
+                                      {label.replace(/[()]/g, "")}
+                                    </button>
+                                    <input
+                                      type="text"
+                                      value={opt}
+                                      onChange={(e) => {
+                                        const next = [...(q.options || [])];
+                                        next[oi] = e.target.value;
+                                        updateQ(si, qi, { options: next });
+                                      }}
+                                      className="qp-input text-sm py-1 flex-1"
+                                      spellCheck={false}
+                                      data-testid={`edit-q-option-input-${q.id}-${oi}`}
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         {q.diagram_path && (
                           <div className="mt-3 pl-6">
                             <DiagramImage paperId={id} questionId={q.id} />
@@ -593,6 +641,41 @@ export default function PaperView() {
                             [{q.marks}]
                           </span>
                         </div>
+                        {(q.format || "").toLowerCase() === "mcq" &&
+                          Array.isArray(q.options) &&
+                          q.options.length > 0 && (
+                            <div
+                              className="mt-2 pl-6 space-y-1"
+                              data-testid={`mcq-options-${q.id}`}
+                            >
+                              {q.options.slice(0, 4).map((opt, oi) => {
+                                const label = ["(a)", "(b)", "(c)", "(d)"][oi] || `(${oi + 1})`;
+                                const isCorrect = Number(q.correct_option) === oi;
+                                return (
+                                  <div
+                                    key={oi}
+                                    className={`text-sm flex items-start gap-2 ${
+                                      isCorrect ? "text-green-800" : ""
+                                    }`}
+                                    data-testid={`mcq-option-${q.id}-${oi}`}
+                                  >
+                                    <span className="font-bold w-7 shrink-0">{label}</span>
+                                    <span className="flex-1">
+                                      <MathText text={String(opt)} />
+                                    </span>
+                                    {isCorrect && (
+                                      <span
+                                        className="no-print text-[10px] uppercase tracking-wider font-bold text-green-700 bg-green-50 px-1.5 py-0.5"
+                                        data-testid={`mcq-correct-${q.id}`}
+                                      >
+                                        Correct
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         <div className="mt-2 flex flex-wrap gap-1 pl-6">
                           <span className={typeBadge(q.type)}>{q.type}</span>
                           <span className="qp-badge">{q.difficulty}</span>
