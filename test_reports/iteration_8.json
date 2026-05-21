@@ -1,0 +1,50 @@
+{
+  "summary": "Locked competitive-exam formats + batched generation tested end-to-end. Backend 4/5 pytest pass: /formats returns all 5 presets (JEE_MAINS 75/180/300, JEE_ADV 54/180/180, CAT 66/120/198, UPSC 100/120/200, NEET 180/200/720) with all required fields including format_distribution, batch_size, subjects, notes. JEE_MAINS generate with client-sent question_count=5/duration_minutes=10 was correctly overridden — paper persisted with duration_minutes=180, total_marks=300, format_distribution={mcq:80,numerical:20}. Background batched generation completed in ~135s and yielded 75 questions (verified <=75 truncation cap and >=60 variance floor). PDF download on the freshly-generated competitive paper returns 200 application/pdf. GENERIC exam respects client values (5q/25min persisted as-is). Frontend E2E verified: on the seeded JEE_MAINS preset (d684ab45) the locked-format-card renders with 'JEE Main 2026 — NTA pattern' label, locked-questions=75, locked-duration=180, locked-marks=300, NTA notes paragraph; comp-question-count and comp-duration inputs are HIDDEN; difficulty + custom-prompt + comp-generate-btn still render. GENERIC exam (51675e77…) correctly renders the question_count/duration inputs and no locked card.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/competitive-exams/formats",
+        "issue": "Spec says 'Endpoint is auth-protected' but the route in competitive_routes.py has NO Depends(get_current_user). Unauthenticated request returns 200 with the full formats dict. Either remove the spec line or add Depends(get_current_user) to the handler. Frontend already sends Authorization header so behaviour is unchanged in-app, but the contract claim is violated."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "tests_executed": {
+    "TestFormatsEndpoint::test_formats_requires_auth": "FAIL (endpoint is currently public, not auth-protected — see minor issue)",
+    "TestFormatsEndpoint::test_formats_returns_all_five": "PASS (all 5 codes present with question_count/duration_minutes/total_marks/batch_size/format_distribution/subjects/notes/label fields, values match spec)",
+    "TestLockedFormatOverride::test_jee_mains_overrides_client_values": "PASS (sent 5q/10min, persisted 75q/180min/300m with {mcq:80,numerical:20}; background gen reached ready in ~135s with 75 questions, exam_type stamped JEE_MAINS)",
+    "TestLockedFormatOverride::test_pdf_download_for_jee_paper": "PASS (200 application/pdf, >1KB)",
+    "TestGenericRespectsClient::test_generic_exam_uses_client_values": "PASS (GENERIC exam persisted 25min/5 total_marks/{mcq:100} from client without override)"
+  },
+  "frontend_smoke_passed": {
+    "jee_mains_preset_page": "locked-format-card visible with locked-questions=75, locked-duration=180min, locked-marks=300; comp-question-count + comp-duration counts == 0 (hidden); comp-diff-easy/comp-custom-prompt/comp-generate-btn all visible",
+    "generic_exam_page": "locked-format-card not rendered, comp-question-count input rendered (count==1) — GENERIC path preserved"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_locked_formats.py",
+    "/app/test_reports/pytest/locked_formats.xml"
+  ],
+  "action_items": [
+    "MINOR (optional): /api/competitive-exams/formats currently has no auth dependency. Either (a) add `user: dict = Depends(get_current_user)` to the handler to match the spec line, OR (b) update the spec to acknowledge the endpoint is public (the dict is non-sensitive canonical data). Frontend behaviour is unaffected either way."
+  ],
+  "critical_code_review_comments": [
+    "_generate_competitive_paper batching logic is correct: num_batches=ceil(total_q/batch_size), sizes distributed evenly with leftover spread by `for i in range(total_q - sum(sizes)): sizes[i]+=1`. For JEE_MAINS that's [25,25,25] — clean. Per-batch failure tolerance via try/except + continue is sound, and the final-fail path raises only if ALL batches yielded zero. Good.",
+    "competitive_routes.py line 472: `total_marks: spec['total_marks'] if spec else req.question_count` — uses question_count as marks fallback for GENERIC. Slightly counter-intuitive (1 mark per Q assumption); a comment helps but maybe rename to make explicit. The /generate-paper handler (line 503) also does this, kept consistent.",
+    "exam_formats.py is well-structured and immutable (module-level dict), single source of truth for both backend lock + frontend display via /formats endpoint. No drift risk now.",
+    "Lock is applied in two places: paper_doc creation (immediate persistence at line 497-520) AND the post-generation update_one (line 459-477). Both reach for spec independently — consider extracting into a small helper to avoid future drift. Not blocking.",
+    "/formats endpoint is unauthenticated (no Depends in route) — minor contract gap with spec. Trivial 1-line fix."
+  ],
+  "updated_files": ["/app/backend/tests/test_locked_formats.py (new)"],
+  "success_rate": {"backend": "80% (4/5 — only failure is the auth-protected contract claim; functional locking + batching + override are all PASS)", "frontend": "100% (locked card renders on preset, inputs hidden, GENERIC still shows inputs)"},
+  "test_credentials": "Admin admin@bodhi.ai/admin123; seeded JEE_MAINS preset id d684ab45-2441-4563-a873-8ee935864b4b (3 past_questions)",
+  "seed_data_creation": "Created during tests: 1 JEE_MAINS practice paper (75 questions, ready) under the seeded preset and 1 GENERIC test exam + 1 GENERIC paper. All prefixed TEST_ in title for cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "JEE_MAINS 75q batched generation verified end-to-end (~2:15 wall-time, 3 sequential LLM batches via gpt-5.1 chain). JEE_ADV/CAT/UPSC/NEET batched paths were NOT live-tested because each costs another 2-5 min; routing + batching logic is identical across presets so they should work — if main agent wants a fuller smoke, parametrise the JEE_MAINS test over all preset ids. NEET 180q in 6 batches is the longest expected run (~4-5 min). The /formats unauth gap is the only outstanding non-test issue.",
+  "rca_of_the_issue": "Spec line 'Endpoint is auth-protected' does not match the implementation in competitive_routes.py line 59-63 where the handler signature has no Depends. Either the spec or the code needs to change. Not a regression — the route was added without auth in this iteration."
+}

@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from auth import get_current_user
 from deps import api_router, db, logger, utcnow_iso
+from exam_formats import EXAM_FORMATS, get_format
 from llm_adapter import chain_for_exam, chat_complete, parse_json_response
 from pdf_utils import chunk_text, extract_text
 from prompts import (
@@ -49,10 +50,17 @@ class CompetitivePaperRequest(BaseModel):
     title: str = "Practice Paper"
     topics: list[str] = Field(..., min_length=1)
     difficulty: str = "medium"
-    question_count: int = Field(10, ge=3, le=60)
+    question_count: int = Field(10, ge=3, le=200)
     duration_minutes: int = Field(60, ge=5, le=300)
     format_distribution: dict = Field(default_factory=lambda: {"mcq": 100})
     custom_instructions: str = ""
+
+
+@api_router.get("/competitive-exams/formats")
+async def competitive_exam_formats():
+    """Public dictionary of locked formats — UI uses this to display
+    canonical info and to hide question-count/duration inputs for presets."""
+    return EXAM_FORMATS
 
 
 # ---------------------------------------------------------------------------
@@ -287,55 +295,16 @@ async def _retrieve_anchors(exam_id: str, topics: list[str], k_per_topic: int = 
     return anchors
 
 
-async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperRequest, user_id: str) -> None:
-    """Background task that builds + writes a competitive paper using RAG."""
-    anchors: list = []
-    rag_dist: dict = {"easy": 0, "medium": 0, "hard": 0}
-    exam_type = "GENERIC"
-    try:
-        exam = await db.competitive_exams.find_one({"id": req.exam_id}, {"_id": 0})
-        if not exam:
-            raise RuntimeError(f"exam {req.exam_id} missing")
-        exam_type = (exam.get("exam_type") or "GENERIC").upper()
-        anchors = await _retrieve_anchors(req.exam_id, req.topics)
-        rag_dist = difficulty_distribution(anchors)
-        prompt = competitive_qgen_prompt(
-            exam_name=exam.get("name", "Competitive Exam"),
-            topics=req.topics,
-            difficulty=req.difficulty,
-            question_count=req.question_count,
-            duration=req.duration_minutes,
-            anchors=anchors,
-            rag_dist=rag_dist,
-            format_distribution=req.format_distribution,
-            custom_instructions=req.custom_instructions,
-            exam_type=exam_type,
-        )
-        raw = await chat_complete(
-            system_message=competitive_system_for_exam(exam_type),
-            user_text=prompt,
-            provider_chain=chain_for_exam(exam_type),
-        )
-        data = parse_json_response(raw)
-    except Exception as e:  # noqa: BLE001
-        logger.exception("Competitive paper generation failed")
-        await db.papers.update_one(
-            {"id": paper_id},
-            {"$set": {
-                "generation_status": "failed",
-                "generation_error": str(e)[:500],
-            }},
-        )
-        return
-
-    sections = data.get("sections") or []
+def _normalise_questions(sections: list, default_difficulty: str) -> list:
+    """In-place normalise + return the flat question list. Same logic used
+    by both the single-shot and batched generation paths."""
     for s in sections:
         for q in s.get("questions", []):
             q["id"] = str(uuid.uuid4())
             q.setdefault("important", False)
             q.setdefault("marks", 1)
             q.setdefault("type", "concept")
-            q.setdefault("difficulty", req.difficulty)
+            q.setdefault("difficulty", default_difficulty)
             q.setdefault("needs_diagram", False)
             q.setdefault("format", "")
             if (q.get("format") or "").lower() == "mcq":
@@ -353,11 +322,144 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             else:
                 q.pop("options", None)
                 q.pop("correct_option", None)
+    return [q for s in sections for q in s.get("questions", [])]
 
+
+async def _generate_one_batch(
+    exam, exam_type: str, batch_topics: list[str], batch_count: int,
+    batch_difficulty: str, batch_duration: int, anchors: list,
+    rag_dist: dict, format_distribution: dict, custom_instructions: str,
+    batch_index: int, batch_total: int,
+) -> dict:
+    """Single LLM call producing up to ~batch_count questions."""
+    batch_instr = custom_instructions
+    if batch_total > 1:
+        batch_instr = (
+            (custom_instructions + "\n\n" if custom_instructions else "")
+            + f"This is batch {batch_index + 1} of {batch_total} for the full "
+            f"paper. Generate EXACTLY {batch_count} ORIGINAL questions in this "
+            "batch. Vary question style so subsequent batches don't repeat your phrasing."
+        )
+    prompt = competitive_qgen_prompt(
+        exam_name=exam.get("name", "Competitive Exam"),
+        topics=batch_topics,
+        difficulty=batch_difficulty,
+        question_count=batch_count,
+        duration=batch_duration,
+        anchors=anchors,
+        rag_dist=rag_dist,
+        format_distribution=format_distribution,
+        custom_instructions=batch_instr,
+        exam_type=exam_type,
+    )
+    raw = await chat_complete(
+        system_message=competitive_system_for_exam(exam_type),
+        user_text=prompt,
+        provider_chain=chain_for_exam(exam_type),
+    )
+    return parse_json_response(raw)
+
+
+async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperRequest, user_id: str) -> None:
+    """Background task that builds + writes a competitive paper using RAG.
+
+    For preset exam_types (JEE_MAINS, NEET, …) the request's question_count,
+    duration_minutes, total_marks and format_distribution are OVERRIDDEN
+    with the official prescribed format from `exam_formats.EXAM_FORMATS`.
+
+    Large papers (>batch_size questions) are generated in sequential
+    batches and merged so we stay under the LLM output-token budget while
+    still producing the full prescribed paper.
+    """
+    anchors: list = []
+    rag_dist: dict = {"easy": 0, "medium": 0, "hard": 0}
+    exam_type = "GENERIC"
+    recovered = False
+    instructions = ""
+    sections: list = []
+    try:
+        exam = await db.competitive_exams.find_one({"id": req.exam_id}, {"_id": 0})
+        if not exam:
+            raise RuntimeError(f"exam {req.exam_id} missing")
+        exam_type = (exam.get("exam_type") or "GENERIC").upper()
+        anchors = await _retrieve_anchors(req.exam_id, req.topics)
+        rag_dist = difficulty_distribution(anchors)
+
+        spec = get_format(exam_type)
+        if spec:
+            # Locked official format — override any client-side numbers.
+            total_q = spec["question_count"]
+            duration = spec["duration_minutes"]
+            fmt_dist = dict(spec["format_distribution"])
+            batch_size = spec["batch_size"]
+        else:
+            total_q = req.question_count
+            duration = req.duration_minutes
+            fmt_dist = req.format_distribution
+            batch_size = max(req.question_count, 30)  # GENERIC: single batch
+
+        # Compute batch plan (each batch ≤ batch_size).
+        num_batches = max(1, (total_q + batch_size - 1) // batch_size)
+        sizes = [total_q // num_batches] * num_batches
+        for i in range(total_q - sum(sizes)):
+            sizes[i] += 1
+
+        all_questions: list = []
+        for b_i, b_count in enumerate(sizes):
+            try:
+                data = await _generate_one_batch(
+                    exam=exam,
+                    exam_type=exam_type,
+                    batch_topics=req.topics,
+                    batch_count=b_count,
+                    batch_difficulty=req.difficulty,
+                    batch_duration=duration,
+                    anchors=anchors,
+                    rag_dist=rag_dist,
+                    format_distribution=fmt_dist,
+                    custom_instructions=req.custom_instructions,
+                    batch_index=b_i,
+                    batch_total=num_batches,
+                )
+            except Exception as be:  # noqa: BLE001
+                logger.warning(f"Batch {b_i+1}/{num_batches} failed: {be}")
+                continue
+            if not instructions and data.get("instructions"):
+                instructions = data["instructions"]
+            if data.get("_recovered_from_truncation"):
+                recovered = True
+            for sec in data.get("sections") or []:
+                all_questions.extend(sec.get("questions") or [])
+
+        if not all_questions:
+            raise RuntimeError("No questions produced across batches")
+
+        # Truncate to the prescribed total in case batches over-produced.
+        all_questions = all_questions[:total_q]
+
+        # Group into 1 section labelled with the exam (we keep the section
+        # blueprint simple; teachers can re-section in the editor if needed).
+        sections = [{
+            "title": (spec["label"] if spec else exam.get("name", "Practice Paper")),
+            "questions": all_questions,
+        }]
+        _normalise_questions(sections, req.difficulty)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Competitive paper generation failed")
+        await db.papers.update_one(
+            {"id": paper_id},
+            {"$set": {
+                "generation_status": "failed",
+                "generation_error": str(e)[:500],
+            }},
+        )
+        return
+
+    spec = get_format(exam_type)
     await db.papers.update_one(
         {"id": paper_id},
         {"$set": {
-            "instructions": data.get("instructions", ""),
+            "instructions": instructions,
             "sections": sections,
             "diagrams_pending": 0,
             "generation_status": "ready",
@@ -365,7 +467,12 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             "rag_anchors_used": len(anchors),
             "rag_difficulty_distribution": rag_dist,
             "exam_type": exam_type,
-            "recovered_from_truncation": bool(data.get("_recovered_from_truncation")),
+            "recovered_from_truncation": recovered,
+            "duration_minutes": spec["duration_minutes"] if spec else req.duration_minutes,
+            "total_marks": spec["total_marks"] if spec else req.question_count,
+            "format_distribution": (
+                spec["format_distribution"] if spec else req.format_distribution
+            ),
         }},
     )
 
@@ -385,8 +492,18 @@ async def generate_competitive_paper(
         raise HTTPException(status_code=404, detail="Exam not found")
 
     paper_id = str(uuid.uuid4())
-    fmt_dist = {k: int(v) for k, v in (req.format_distribution or {}).items() if int(v) > 0}
-    total_marks = req.question_count  # 1 mark per MCQ default
+    # Lock to official format spec when exam_type is a known preset.
+    spec = get_format((exam.get("exam_type") or "GENERIC").upper())
+    if spec:
+        locked_duration = spec["duration_minutes"]
+        locked_total_marks = spec["total_marks"]
+        locked_fmt = dict(spec["format_distribution"])
+    else:
+        locked_duration = req.duration_minutes
+        locked_total_marks = req.question_count  # 1 mark per MCQ default
+        locked_fmt = {
+            k: int(v) for k, v in (req.format_distribution or {}).items() if int(v) > 0
+        }
     paper_doc = {
         "id": paper_id,
         "owner_id": user["id"],
@@ -397,10 +514,10 @@ async def generate_competitive_paper(
         "textbook_ids": [],
         "topics": [{"name": t, "weight": 5} for t in req.topics],
         "difficulty": req.difficulty,
-        "duration_minutes": req.duration_minutes,
-        "total_marks": total_marks,
+        "duration_minutes": locked_duration,
+        "total_marks": locked_total_marks,
         "distribution": {"information": 30, "concept": 40, "application": 30},
-        "format_distribution": fmt_dist,
+        "format_distribution": locked_fmt,
         "custom_instructions": req.custom_instructions,
         "section_blueprint": "",
         "instructions": "",

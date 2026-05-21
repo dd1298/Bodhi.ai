@@ -34,7 +34,10 @@ export default function CompetitiveExamDetail() {
   const [duration, setDuration] = useState(30);
   const [customPrompt, setCustomPrompt] = useState("");
   const [ragPreview, setRagPreview] = useState(null);
+  const [examFormats, setExamFormats] = useState({});
   const fileRef = useRef(null);
+
+  const lockedFormat = exam?.exam_type ? examFormats[exam.exam_type] : null;
 
   const load = async () => {
     try {
@@ -51,6 +54,13 @@ export default function CompetitiveExamDetail() {
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => {
+    api
+      .get("/competitive-exams/formats")
+      .then((r) => setExamFormats(r.data || {}))
+      .catch(() => {});
+  }, []);
 
   const topics = useMemo(() => Object.keys(exam?.topic_counts || {}), [exam]);
 
@@ -129,13 +139,18 @@ export default function CompetitiveExamDetail() {
           title: `${exam?.name || "Competitive"} practice`,
           topics: Array.from(selectedTopics),
           difficulty,
-          question_count: questionCount,
-          duration_minutes: duration,
-          format_distribution: { mcq: 100 },
+          // For locked exams the backend overrides these to the official spec.
+          question_count: lockedFormat?.question_count || questionCount,
+          duration_minutes: lockedFormat?.duration_minutes || duration,
+          format_distribution: lockedFormat?.format_distribution || { mcq: 100 },
           custom_instructions: customPrompt,
         }
       );
-      toast.success("Generating — this may take ~20-40s");
+      toast.success(
+        lockedFormat
+          ? `Generating ${lockedFormat.question_count} questions in ${lockedFormat.duration_minutes} min — this may take 1-2 min`
+          : "Generating — this may take ~20-40s"
+      );
       navigate(`/papers/${data.id}`);
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Generation failed");
@@ -306,52 +321,91 @@ export default function CompetitiveExamDetail() {
                 )}
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="qp-label">Difficulty</label>
-                  <div className="flex border-2 border-black">
-                    {["easy", "medium", "hard"].map((d, i, arr) => (
-                      <button
-                        type="button"
-                        key={d}
-                        onClick={() => setDifficulty(d)}
-                        data-testid={`comp-diff-${d}`}
-                        className={`flex-1 py-2 text-xs font-bold uppercase ${
-                          difficulty === d
-                            ? "bg-black text-white"
-                            : "bg-white text-black"
-                        } ${i < arr.length - 1 ? "border-r-2 border-black" : ""}`}
-                      >
-                        {d}
-                      </button>
-                    ))}
+              {lockedFormat ? (
+                <div
+                  className="border-2 border-black bg-neutral-50 p-3"
+                  data-testid="locked-format-card"
+                >
+                  <div className="overline text-neutral-500 mb-2">
+                    // OFFICIAL FORMAT (LOCKED)
+                  </div>
+                  <div className="font-display text-lg mb-1">
+                    {lockedFormat.label}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 my-2 text-center border-2 border-black bg-white">
+                    <div className="p-2 border-r-2 border-black">
+                      <div className="overline text-neutral-500">Questions</div>
+                      <div className="font-display text-2xl" data-testid="locked-questions">
+                        {lockedFormat.question_count}
+                      </div>
+                    </div>
+                    <div className="p-2 border-r-2 border-black">
+                      <div className="overline text-neutral-500">Duration</div>
+                      <div className="font-display text-2xl" data-testid="locked-duration">
+                        {lockedFormat.duration_minutes}
+                        <span className="text-xs ml-1">min</span>
+                      </div>
+                    </div>
+                    <div className="p-2">
+                      <div className="overline text-neutral-500">Marks</div>
+                      <div className="font-display text-2xl" data-testid="locked-marks">
+                        {lockedFormat.total_marks}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-neutral-600 leading-relaxed">
+                    {lockedFormat.notes}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="qp-label">Questions</label>
+                    <input
+                      type="number"
+                      min={3}
+                      max={60}
+                      value={questionCount}
+                      onChange={(e) =>
+                        setQuestionCount(parseInt(e.target.value, 10) || 0)
+                      }
+                      className="qp-input"
+                      data-testid="comp-question-count"
+                    />
+                  </div>
+                  <div>
+                    <label className="qp-label">Duration (min)</label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={300}
+                      value={duration}
+                      onChange={(e) => setDuration(parseInt(e.target.value, 10) || 0)}
+                      className="qp-input"
+                      data-testid="comp-duration"
+                    />
                   </div>
                 </div>
-                <div>
-                  <label className="qp-label">Questions</label>
-                  <input
-                    type="number"
-                    min={3}
-                    max={60}
-                    value={questionCount}
-                    onChange={(e) =>
-                      setQuestionCount(parseInt(e.target.value, 10) || 0)
-                    }
-                    className="qp-input"
-                    data-testid="comp-question-count"
-                  />
-                </div>
-                <div>
-                  <label className="qp-label">Duration (min)</label>
-                  <input
-                    type="number"
-                    min={5}
-                    max={300}
-                    value={duration}
-                    onChange={(e) => setDuration(parseInt(e.target.value, 10) || 0)}
-                    className="qp-input"
-                    data-testid="comp-duration"
-                  />
+              )}
+
+              <div>
+                <label className="qp-label">Difficulty</label>
+                <div className="flex border-2 border-black">
+                  {["easy", "medium", "hard"].map((d, i, arr) => (
+                    <button
+                      type="button"
+                      key={d}
+                      onClick={() => setDifficulty(d)}
+                      data-testid={`comp-diff-${d}`}
+                      className={`flex-1 py-2 text-xs font-bold uppercase ${
+                        difficulty === d
+                          ? "bg-black text-white"
+                          : "bg-white text-black"
+                      } ${i < arr.length - 1 ? "border-r-2 border-black" : ""}`}
+                    >
+                      {d}
+                    </button>
+                  ))}
                 </div>
               </div>
 
