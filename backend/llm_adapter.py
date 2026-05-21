@@ -122,7 +122,7 @@ async def chat_complete(
     proxy 502s after its own 60s timeout. To prevent this we run each
     send_message call in a worker thread so the main loop stays free.
     """
-    PER_CALL_TIMEOUT = 75.0
+    PER_CALL_TIMEOUT = 165.0
     last_err: Exception | None = None
     loop = asyncio.get_running_loop()
     chain = provider_chain or PROVIDER_CHAIN
@@ -140,12 +140,13 @@ async def chat_complete(
                     .with_model(provider, model)
                     .with_params(
                         num_retries=0,
-                        timeout=60,
-                        request_timeout=60,
-                        # Big budget so long MCQ papers with LaTeX math don't
-                        # truncate mid-JSON. Most modern chat models cap output
-                        # well below this; setting it high is harmless when the
-                        # model returns less, and prevents the silent 4k cut-off.
+                        # Give the LLM gateway breathing room. Long MCQ batches
+                        # (especially with math, options, distractors and RAG
+                        # anchors in the system message) routinely take 90-130s
+                        # on slow days. Keep both LiteLLM-internal timeouts and
+                        # the outer asyncio wrapper aligned.
+                        timeout=150,
+                        request_timeout=150,
                         max_tokens=16384,
                     )
                 )

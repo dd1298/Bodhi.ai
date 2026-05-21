@@ -26,6 +26,14 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Provider fallback chain for LLMs
 - PDF export of the generated paper
 
+## What's Implemented — 2026-05-21 (LLM timeout resilience + parallel batches)
+- **Root cause:** Users hit "All LLM providers failed: Request timed out" on large competitive papers. The LiteLLM internal timeout was 60s but real JEE/NEET batches with full math + 4 distractors per Q + RAG anchors regularly took 90-130s. Every attempt hit the 60s wall, every retry the same, fallback provider too — so 6+ minutes per batch of pure timeout chains, with the final paper marked `failed`.
+- **Fix 1 — bigger LLM timeouts.** `llm_adapter.chat_complete` now passes `timeout=150 / request_timeout=150` to `LlmChat.with_params(...)` (was 60s) and the outer asyncio wrapper is 165s (was 75s). Aligned so the wrapper kicks in after LiteLLM had its chance, not before.
+- **Fix 2 — smaller batch sizes.** `exam_formats.py` batch_size dropped across the board: JEE Mains 30→20, JEE Adv 27→18, CAT 33→22, UPSC 34→20, NEET 30→20. Each LLM call now has less to produce so it fits comfortably under the new timeout.
+- **Fix 3 — parallel batches.** `_generate_competitive_paper` now runs batches concurrently with `asyncio.gather` + a 3-way semaphore. JEE Mains 75q dropped from ~95s sequential to ~44s parallel; NEET 180q should drop from ~10min to ~3-4min worst case.
+- **Fix 4 — clearer error.** When every batch times out, the persisted `generation_error` now reads: "All LLM providers timed out — the upstream gateway is slow right now. Click 'Retry generation' below; usually clears within a few minutes."
+- **Verified live:** JEE Mains 75q completed in 44s, 100% of questions with 4 options, no truncation, no failed batches.
+
 ## What's Implemented — 2026-05-21 (PaperView MCQ-options rendering)
 - **Root cause:** Although the underlying JEE Mains data correctly had 4 options + correct_option on every question, `PaperView.jsx` only rendered the question text + marks; the options array was never displayed. The PDF download already rendered options (added earlier this session), but on-screen the paper looked option-less.
 - **Fix:** Added MCQ option rendering to `PaperView.jsx` in both view and edit modes. In view mode, options appear under the question on indented `(a)/(b)/(c)/(d)` lines with KaTeX math, the correct option highlighted in green with a screen-only "Correct" badge (`no-print` class so it's stripped from print/PDF). In edit mode, each option becomes an editable text input with a clickable `(a/b/c/d)` button that toggles which option is the correct answer; the change persists through the existing `update_paper` endpoint (since `SectionUpdate.questions: List[dict]` already accepts arbitrary keys).

@@ -437,26 +437,42 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
         for i in range(total_q - sum(sizes)):
             sizes[i] += 1
 
-        all_questions: list = []
-        for b_i, b_count in enumerate(sizes):
-            try:
-                data = await _generate_one_batch(
+        # Run batches in parallel (capped concurrency=3 to avoid hammering
+        # the LLM gateway and blowing per-tenant rate limits). With per-call
+        # timeouts now at 150s a serial NEET 180-q run could take ~15min;
+        # 3-way parallelism brings it back to ~5min worst case.
+        semaphore = _asyncio.Semaphore(3)
+
+        async def _run(idx: int, count: int):
+            async with semaphore:
+                return idx, await _generate_one_batch(
                     exam=exam,
                     exam_type=exam_type,
                     batch_topics=req.topics,
-                    batch_count=b_count,
+                    batch_count=count,
                     batch_difficulty=req.difficulty,
                     batch_duration=duration,
                     anchors=anchors,
                     rag_dist=rag_dist,
                     format_distribution=fmt_dist,
                     custom_instructions=req.custom_instructions,
-                    batch_index=b_i,
+                    batch_index=idx,
                     batch_total=num_batches,
                 )
-            except Exception as be:  # noqa: BLE001
-                logger.warning(f"Batch {b_i+1}/{num_batches} failed: {be}")
+
+        results = await _asyncio.gather(
+            *[_run(i, c) for i, c in enumerate(sizes)],
+            return_exceptions=True,
+        )
+
+        all_questions: list = []
+        failed_batches = 0
+        for r in results:
+            if isinstance(r, Exception):
+                failed_batches += 1
+                logger.warning(f"Batch failed: {r}")
                 continue
+            _, data = r
             if not instructions and data.get("instructions"):
                 instructions = data["instructions"]
             if data.get("_recovered_from_truncation"):
@@ -465,7 +481,11 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
                 all_questions.extend(sec.get("questions") or [])
 
         if not all_questions:
-            raise RuntimeError("No questions produced across batches")
+            raise RuntimeError(
+                "All LLM providers timed out — the upstream gateway is slow "
+                "right now. Click 'Retry generation' below; usually clears "
+                "within a few minutes."
+            )
 
         # Truncate to the prescribed total in case batches over-produced.
         all_questions = all_questions[:total_q]
