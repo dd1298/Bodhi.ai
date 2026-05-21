@@ -26,6 +26,13 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Provider fallback chain for LLMs
 - PDF export of the generated paper
 
+## What's Implemented — 2026-05-21 (Locked official competitive-exam formats + batching)
+- **Locked official formats** (`exam_formats.EXAM_FORMATS`): JEE_MAINS 75q/180min/300m (80% MCQ + 20% numerical), JEE_ADV 54q/180min/180m (70% MCQ + 30% numerical), CAT 66q/120min/198m (75% MCQ + 25% short), UPSC 100q/120min/200m (100% MCQ), NEET 180q/200min/720m (100% MCQ). Backend overrides any client-sent `question_count`/`duration_minutes`/`format_distribution`/`total_marks` when `exam_type` is a preset; GENERIC still respects client values.
+- **Batched generation**: for papers larger than `batch_size` (30 for JEE_MAINS, 27 for JEE_ADV, 33 for CAT, 34 for UPSC, 30 for NEET), `_generate_competitive_paper` issues sequential LLM calls per batch and merges into a single section. Per-batch failures are tolerated (other batches still count); only an empty all-batches-zero outcome marks the paper failed. Verified live: JEE_MAINS produced 75 questions across 3 batches in ~95s.
+- **New endpoint** `GET /api/competitive-exams/formats` returns the locked-format catalogue (auth-required) so the UI can drive both the locked-info card and the validation.
+- **Frontend** — `/competitive-exams/:id` for a preset exam shows a new "Official format (locked)" card with question_count/duration/marks tiles + the NTA/UPSC/IIM notes, and HIDES the question-count + duration inputs. Difficulty + custom-instructions inputs remain. Toast on generate notes the expected time (1-2 min for batched runs). GENERIC exams keep the editable inputs as before.
+- **Verified via testing_agent_v3_fork → iteration_8.json**: backend 4/5 functional (only failure was the unauth /formats endpoint, now fixed), frontend 100% — locked-card renders on preset, inputs hidden, GENERIC still shows inputs.
+
 ## What's Implemented — 2026-05-21 (Truncation fix: max_tokens + JSON salvage)
 - **Root cause**: LLM hit default ~4k output token budget mid-stream on long MCQ papers with LaTeX math; response was cut off and `parse_json_response` failed with the user-visible "Could not parse JSON from: { …Section A - Information Bas". Both teacher AND competitive paper generation were affected.
 - **Fix 1 — bigger output budget**: `chat_complete()` now passes `max_tokens=16384` via `LlmChat.with_params(...)` for every provider/attempt. Modern OpenAI/Claude/Gemini models can emit far more than 4k tokens; raising the cap is safe (no extra cost when the model returns less).

@@ -57,9 +57,10 @@ class CompetitivePaperRequest(BaseModel):
 
 
 @api_router.get("/competitive-exams/formats")
-async def competitive_exam_formats():
-    """Public dictionary of locked formats — UI uses this to display
-    canonical info and to hide question-count/duration inputs for presets."""
+async def competitive_exam_formats(user: dict = Depends(get_current_user)):
+    """Locked-format catalogue. UI uses this to render the canonical
+    question-count/duration/marks for each preset exam and to hide editable
+    inputs for those. Auth-required (no PII, but no need to leak internals)."""
     return EXAM_FORMATS
 
 
