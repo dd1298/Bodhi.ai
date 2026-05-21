@@ -138,7 +138,16 @@ async def chat_complete(
                         system_message=system_message,
                     )
                     .with_model(provider, model)
-                    .with_params(num_retries=0, timeout=60, request_timeout=60)
+                    .with_params(
+                        num_retries=0,
+                        timeout=60,
+                        request_timeout=60,
+                        # Big budget so long MCQ papers with LaTeX math don't
+                        # truncate mid-JSON. Most modern chat models cap output
+                        # well below this; setting it high is harmless when the
+                        # model returns less, and prevents the silent 4k cut-off.
+                        max_tokens=16384,
+                    )
                 )
                 msg = UserMessage(text=user_text)
 
@@ -275,26 +284,72 @@ def parse_json_response(text: str) -> Any:
     # Salvage a truncated `answers` array (common with long step-by-step solutions)
     salvage = re.search(r'"answers"\s*:\s*\[(.*)', text, re.DOTALL)
     if salvage:
-        body = salvage.group(1)
-        # Split on top-level object boundaries and try parsing each
-        items = []
-        depth = 0
-        start = None
-        for i, ch in enumerate(body):
-            if ch == "{":
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0 and start is not None:
-                    chunk = body[start : i + 1]
-                    try:
-                        items.append(json.loads(chunk))
-                    except json.JSONDecodeError:
-                        pass
-                    start = None
+        items = _walk_top_level_objects(salvage.group(1))
         if items:
             return {"answers": items}
 
+    # Salvage a truncated paper: pull "instructions" if present + walk any
+    # complete question objects out of the (possibly broken) sections array.
+    # Returns a single-section paper containing whatever questions survived
+    # the cut-off — better than failing the whole job.
+    instr_m = re.search(r'"instructions"\s*:\s*"([^"]*)"', text)
+    instructions = instr_m.group(1) if instr_m else ""
+    # Walk every `"questions": [` block in the response; for each, scan the
+    # remaining text and collect complete question objects until brace depth
+    # closes the array (or text ends).
+    questions: list = []
+    for qm in re.finditer(r'"questions"\s*:\s*\[', text):
+        questions.extend(_walk_top_level_objects(text[qm.end():]))
+    # Dedupe in the rare case multiple blocks salvage the same items.
+    seen: set = set()
+    unique_questions = []
+    for q in questions:
+        sig = (q.get("question", ""), tuple(q.get("options", []) or []))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        unique_questions.append(q)
+    if unique_questions:
+        return {
+            "instructions": instructions,
+            "sections": [{"title": "Recovered Questions", "questions": unique_questions}],
+            "_recovered_from_truncation": True,
+        }
+
     raise ValueError(f"Could not parse JSON from: {text[:200]}")
+
+
+def _walk_top_level_objects(body: str) -> list:
+    """Yield every fully-closed top-level JSON object from `body`. Used to
+    salvage partial arrays from truncated LLM output."""
+    items: list = []
+    depth = 0
+    start: int | None = None
+    in_string = False
+    escape = False
+    for i, ch in enumerate(body):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                chunk = body[start : i + 1]
+                try:
+                    items.append(json.loads(chunk))
+                except json.JSONDecodeError:
+                    pass
+                start = None
+    return items

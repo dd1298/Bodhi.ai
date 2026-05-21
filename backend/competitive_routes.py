@@ -365,6 +365,7 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             "rag_anchors_used": len(anchors),
             "rag_difficulty_distribution": rag_dist,
             "exam_type": exam_type,
+            "recovered_from_truncation": bool(data.get("_recovered_from_truncation")),
         }},
     )
 

@@ -321,6 +321,21 @@ export default function PaperView() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-5xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
+        {paper.recovered_from_truncation && (
+          <div
+            className="no-print mb-6 border-2 border-yellow-400 bg-yellow-50 p-4"
+            data-testid="recovered-banner"
+          >
+            <div className="font-bold text-sm mb-1 text-yellow-900">
+              Partial recovery
+            </div>
+            <p className="text-xs text-yellow-900 leading-relaxed">
+              The AI's response was cut off before completing this paper. We recovered the
+              questions that were finished — review them and use "Retry generation" if
+              you'd like a fresh, full attempt.
+            </p>
+          </div>
+        )}
         {/* Toolbar */}
         <div className="no-print flex items-center justify-between mb-8 flex-wrap gap-3">
           <Link

@@ -239,6 +239,7 @@ async def generate_paper_background(
             "diagrams_pending": pending_count,
             "generation_status": "ready",
             "generation_error": None,
+            "recovered_from_truncation": bool(data.get("_recovered_from_truncation")),
         }},
     )
 
