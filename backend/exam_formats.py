@@ -18,12 +18,14 @@ EXAM_FORMATS: dict[str, dict] = {
         "question_count": 75,
         "duration_minutes": 180,
         "total_marks": 300,
-        # NTA: 60 single-correct MCQs + 15 numerical-answer
-        "format_distribution": {"mcq": 80, "numerical": 20},
+        # Practice papers in Bodhi.ai use 100% 4-option MCQ for every question
+        # (including items that would be numerical-answer in the real NTA exam)
+        # so students see consistent 4-option choices and we can auto-grade.
+        "format_distribution": {"mcq": 100},
         "batch_size": 30,
         "subjects": ["Physics", "Chemistry", "Mathematics"],
         "notes": (
-            "Three subjects × 25 questions each (20 MCQ + 5 numerical). "
+            "Three subjects × 25 questions each (4-option MCQ practice format). "
             "+4 / -1 marking. Three hours."
         ),
     },
@@ -32,12 +34,12 @@ EXAM_FORMATS: dict[str, dict] = {
         "question_count": 54,
         "duration_minutes": 180,
         "total_marks": 180,
-        "format_distribution": {"mcq": 70, "numerical": 30},
+        "format_distribution": {"mcq": 100},
         "batch_size": 27,
         "subjects": ["Physics", "Chemistry", "Mathematics"],
         "notes": (
-            "One paper, three subjects × 18 questions each. Mix of single-correct, "
-            "multi-correct and numerical-answer items. Three hours."
+            "One paper, three subjects × 18 questions each (4-option MCQ practice "
+            "format with single correct answer). Three hours."
         ),
     },
     "CAT": {
@@ -45,12 +47,12 @@ EXAM_FORMATS: dict[str, dict] = {
         "question_count": 66,
         "duration_minutes": 120,
         "total_marks": 198,
-        "format_distribution": {"mcq": 75, "short_answer": 25},
+        "format_distribution": {"mcq": 100},
         "batch_size": 33,
         "subjects": ["VARC", "DILR", "QA"],
         "notes": (
-            "Three sections × 22 questions: VARC, DILR, QA. ~75% MCQ + ~25% "
-            "Type-In-The-Answer (TITA). 40 min per section, no negative marking on TITA."
+            "Three sections × 22 questions: VARC, DILR, QA. 4-option MCQ "
+            "practice format throughout. 40 min per section."
         ),
     },
     "UPSC": {

@@ -296,10 +296,20 @@ async def _retrieve_anchors(exam_id: str, topics: list[str], k_per_topic: int = 
     return anchors
 
 
-def _normalise_questions(sections: list, default_difficulty: str) -> list:
-    """In-place normalise + return the flat question list. Same logic used
-    by both the single-shot and batched generation paths."""
+def _normalise_questions(
+    sections: list,
+    default_difficulty: str,
+    strict_mcq: bool = False,
+) -> list:
+    """In-place normalise sections + return the flat question list.
+
+    When `strict_mcq` is True (used for JEE_MAINS / JEE_ADV / CAT / UPSC /
+    NEET — all locked to 100% 4-option MCQ), any question that arrives
+    without exactly 4 options or with no valid correct_option is DROPPED
+    rather than degraded. Batching gives us extra questions to absorb the
+    occasional reject."""
     for s in sections:
+        kept: list = []
         for q in s.get("questions", []):
             q["id"] = str(uuid.uuid4())
             q.setdefault("important", False)
@@ -308,12 +318,32 @@ def _normalise_questions(sections: list, default_difficulty: str) -> list:
             q.setdefault("difficulty", default_difficulty)
             q.setdefault("needs_diagram", False)
             q.setdefault("format", "")
+
+            opts = q.get("options") or []
+            if isinstance(opts, list):
+                opts = [str(o).strip() for o in opts if str(o).strip()][:4]
+            else:
+                opts = []
+
+            if strict_mcq:
+                # In MCQ-only mode every question MUST be a valid 4-option MCQ.
+                if len(opts) != 4:
+                    continue  # drop
+                try:
+                    co = int(q.get("correct_option", 0))
+                except (TypeError, ValueError):
+                    co = 0
+                if not (0 <= co <= 3):
+                    continue  # drop
+                q["format"] = "mcq"
+                q["options"] = opts
+                q["correct_option"] = co
+                kept.append(q)
+                continue
+
+            # Lenient path (GENERIC exams): keep MCQ if options present,
+            # otherwise treat as a free-form question.
             if (q.get("format") or "").lower() == "mcq":
-                opts = q.get("options") or []
-                if isinstance(opts, list):
-                    opts = [str(o).strip() for o in opts][:4]
-                else:
-                    opts = []
                 q["options"] = opts
                 try:
                     co = int(q.get("correct_option", 0))
@@ -323,6 +353,8 @@ def _normalise_questions(sections: list, default_difficulty: str) -> list:
             else:
                 q.pop("options", None)
                 q.pop("correct_option", None)
+            kept.append(q)
+        s["questions"] = kept
     return [q for s in sections for q in s.get("questions", [])]
 
 
@@ -444,7 +476,14 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             "title": (spec["label"] if spec else exam.get("name", "Practice Paper")),
             "questions": all_questions,
         }]
-        _normalise_questions(sections, req.difficulty)
+        # If the locked format is 100% MCQ, drop any rogue non-MCQ questions
+        # so users never see broken (no-options) items.
+        strict_mcq = (
+            isinstance(fmt_dist, dict)
+            and len(fmt_dist) == 1
+            and (fmt_dist.get("mcq") or 0) >= 100
+        )
+        _normalise_questions(sections, req.difficulty, strict_mcq=strict_mcq)
     except Exception as e:  # noqa: BLE001
         logger.exception("Competitive paper generation failed")
         await db.papers.update_one(

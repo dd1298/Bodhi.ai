@@ -341,6 +341,11 @@ def competitive_qgen_prompt(
     )
 
     format_block = ""
+    is_pure_mcq = (
+        format_distribution
+        and len(format_distribution) == 1
+        and (format_distribution.get("mcq") or 0) >= 100
+    )
     if format_distribution:
         fmt_lines = []
         for fmt, pct in format_distribution.items():
@@ -355,6 +360,17 @@ def competitive_qgen_prompt(
                 + "\nFor 'mcq', emit options:[4 strings] and correct_option:0-3 "
                 "as SEPARATE JSON fields (NOT inlined into the question text).\n\n"
             )
+    if is_pure_mcq:
+        format_block += (
+            "ABSOLUTE RULE: Every single question MUST be format='mcq' with "
+            "EXACTLY 4 options and a correct_option in [0,3]. Do NOT emit any "
+            "numerical-answer, short-answer, fill-in-the-blank or true/false "
+            "questions. For items that would normally be numerical (e.g. 'find "
+            "the value of x'), wrap the numerical answer as one of 4 plausible "
+            "MCQ options — the correct value plus 3 distractors derived from "
+            "common student errors (off-by-one, sign flip, unit swap, dropped "
+            "factor of 2, etc.). Any question lacking 4 options is INVALID.\n\n"
+        )
 
     custom_block = ""
     if custom_instructions.strip():

@@ -26,6 +26,14 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 - Provider fallback chain for LLMs
 - PDF export of the generated paper
 
+## What's Implemented — 2026-05-21 (All competitive papers now 4-option MCQ)
+- **Root cause:** User reported "JEE Mains pattern should have 4 options for each question" — but the locked JEE Mains format was 80% MCQ + 20% numerical (matching NTA's real exam), so 20% of generated questions intentionally had no options. Same issue applied to JEE Adv (30% numerical) and CAT (25% TITA).
+- **Fix:** Locked formats for `JEE_MAINS`, `JEE_ADV`, and `CAT` switched to `{mcq: 100}` in `exam_formats.py`. Practice papers in Bodhi.ai now use 100% 4-option MCQ across every preset (UPSC and NEET were already 100% MCQ). Numerical-style problems are wrapped as MCQs with 4 plausible distractors (correct value + 3 common-error variants).
+- **Prompt hardening:** `competitive_qgen_prompt` detects 100%-MCQ format distribution and appends an "ABSOLUTE RULE" block instructing the LLM to never emit numerical/short-answer/fill-blank/true-false, and to wrap numerical answers as 4 plausible MCQ options.
+- **Defensive normalisation:** New `strict_mcq=True` mode in `_normalise_questions` (used whenever the locked format is 100% MCQ) drops any item that escapes the prompt without 4 valid options + valid `correct_option`. Batching produces enough surplus questions to absorb the occasional reject.
+- **Verified end-to-end:** Fresh JEE Mains generation produced **75/75 MCQs, all 4 options, all valid correct_option** in ~70s. Visual confirmation: numerical answers ("$1.0\\,s$", "$2.0\\,s$", …) wrapped as MCQ options.
+- **Tests:** `tests/test_strict_mcq.py` 2/2 pass — strict mode drops numerical/short/3-option/out-of-range items, lenient mode (GENERIC exams) keeps them.
+
 ## What's Implemented — 2026-05-21 (NTA past-paper OCR fix)
 - **Root cause:** NTA's JEE Mains 2026 result PDFs (and similar exams) render each question stem as a page image while leaving only metadata wrappers in the text layer ("Question Number :", "Question Id :", "Options :", numeric option IDs like 6911215.). pypdf's `extract_text` returned ~22KB of *metadata* — comfortably over the old 500-char threshold for triggering OCR — so OCR never ran and the LLM extraction received only header noise and produced 0 questions.
 - **Fix 1 — smarter OCR trigger.** New `_looks_like_metadata_only()` heuristic in `pdf_utils.py`: counts `Question Number :` markers and measures the average *real prose* (after stripping known NTA header fields and numeric option IDs) between consecutive markers. <80 chars/question on average → text layer is metadata only → force OCR fallback. Threshold tuned and locked behind 3 regression tests in `tests/test_ocr_heuristic.py` (NTA pattern → True; real prose → False; <5 markers → False).
