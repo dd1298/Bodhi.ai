@@ -10,12 +10,16 @@ TOPIC_SYSTEM = (
 def topic_extract_prompt(subject: str, klass: str, text_excerpt: str) -> str:
     return (
         f"Analyse the following textbook content for Class {klass} - {subject}. "
-        "Identify the main topics and their subtopics. Return ONLY strict JSON of the form:\n"
+        "Identify ALL main topics and their subtopics. Return ONLY strict JSON of the form:\n"
         "{\n  \"topics\": [ { \"name\": \"Topic Name\", \"subtopics\": [\"Subtopic 1\", ...] } ]\n}\n\n"
         "Rules:\n"
-        "- 4 to 10 top-level topics, each with 2-5 subtopics.\n"
+        "- Aim for 8 to 18 top-level topics (one per chapter when the content "
+        "shows a table of contents or chapter headings). Each topic should have 2-6 subtopics.\n"
+        "- The content may include a table-of-contents page (chapter numbers + "
+        "page ranges). USE the chapter list there as the authoritative list of "
+        "main topics, plus any additional chapters revealed in body text.\n"
         "- Names must be short (max 6 words), title case.\n"
-        "- Cover ONLY what is present in the text.\n"
+        "- Cover ONLY what is present in the text — never invent topics.\n"
         "- No duplicates. No prose outside JSON.\n\n"
         f"=== TEXTBOOK CONTENT ===\n{text_excerpt}\n=== END ==="
     )

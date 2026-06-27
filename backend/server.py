@@ -3,6 +3,7 @@
 # (auth.JWT_SECRET, llm_adapter API keys, storage credentials) succeed.
 from deps import api_router, app, client, db, logger, utcnow_iso  # noqa: I001
 
+import asyncio
 import os
 import uuid
 from typing import Any, Dict, List, Optional
@@ -317,14 +318,10 @@ async def upload_textbook(
     path = f"{APP_NAME}/textbooks/{user['id']}/{textbook_id}.pdf"
     result = put_object(path, data, "application/pdf")
 
-    # Extract text synchronously (POC)
-    try:
-        text = extract_text(data)
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"PDF extraction failed: {e}")
-        text = ""
-
-    chunks = chunk_text(text)
+    # Insert the book in `ingesting` state immediately, then run text
+    # extraction + OCR in a background task. Large scanned PDFs (e.g. ICSE
+    # textbooks of 200+ pages) can take 60-120s of OCR, which blocks the
+    # uvicorn worker and trips the proxy 502 timeout when done inline.
     doc = {
         "id": textbook_id,
         "owner_id": user["id"],
@@ -332,15 +329,39 @@ async def upload_textbook(
         "original_filename": file.filename,
         "subject": subject,
         "class_name": class_name,
-        "status": "indexed" if chunks else "extraction_failed",
-        "chunk_count": len(chunks),
-        "chunks": chunks[:50],  # cap for POC
+        "status": "ingesting",
+        "chunk_count": 0,
+        "chunks": [],
         "topics": [],
         "is_shared": shared_flag,
         "created_at": utcnow_iso(),
         "is_deleted": False,
     }
     await db.textbooks.insert_one(doc)
+
+    async def _ingest():
+        try:
+            text = await asyncio.to_thread(extract_text, data)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"PDF extraction failed for {textbook_id}: {e}")
+            await db.textbooks.update_one(
+                {"id": textbook_id},
+                {"$set": {"status": "extraction_failed"}},
+            )
+            return
+        chunks = chunk_text(text)
+        await db.textbooks.update_one(
+            {"id": textbook_id},
+            {"$set": {
+                "status": "indexed" if chunks else "extraction_failed",
+                "chunk_count": len(chunks),
+                # Keep more chunks (was 50) — topic extraction now samples
+                # across the whole book so we want a wider spread of context.
+                "chunks": chunks[:120],
+            }},
+        )
+
+    asyncio.create_task(_ingest())
 
     return {
         "id": textbook_id,
@@ -435,8 +456,19 @@ async def extract_topics(textbook_id: str, user: dict = Depends(get_current_user
     if not chunks:
         raise HTTPException(status_code=400, detail="No indexed text available")
 
-    # Use first 8 chunks as excerpt (fits into token budget)
-    excerpt = "\n\n".join(chunks[:8])[:12000]
+    # Sample chunks EVENLY across the textbook so the LLM sees content from
+    # every chapter rather than only the front matter. For an ICSE Class-10
+    # book with 100 chunks, we want ~12 chunks spread out, not the first 12.
+    target = 12
+    if len(chunks) <= target:
+        sampled = chunks
+    else:
+        step = max(1, len(chunks) // target)
+        sampled = chunks[::step][:target]
+        # Always include the very first chunk (often has the ToC).
+        if sampled[0] is not chunks[0]:
+            sampled = [chunks[0]] + sampled[: target - 1]
+    excerpt = "\n\n".join(sampled)[:14000]
     prompt = topic_extract_prompt(tb["subject"], tb["class_name"], excerpt)
     try:
         raw = await chat_complete(
@@ -455,7 +487,9 @@ async def extract_topics(textbook_id: str, user: dict = Depends(get_current_user
                 continue
             subs = [s.strip() for s in (t.get("subtopics") or []) if s and s.strip()]
             clean.append({"name": name, "subtopics": subs[:8]})
-        clean = clean[:12]
+        # Increased cap from 12 to 20 — many ICSE/CBSE books have 12-18 main
+        # chapters and we were truncating real topics off the list.
+        clean = clean[:20]
         await db.textbooks.update_one(
             {"id": textbook_id}, {"$set": {"topics": clean, "status": "topics_ready"}}
         )

@@ -405,25 +405,61 @@ def _strip_boilerplate(text: str) -> str:
 
 
 def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
-    """Run Tesseract OCR on a scanned / image-based PDF. Processes up to
-    max_pages pages to keep latency bounded — enough for topic extraction."""
+    """Run Tesseract OCR on a scanned / image-based PDF.
+
+    Strategy: when the PDF is short, OCR every page up to `max_pages`. For
+    longer books (> max_pages), sample evenly across the whole document so
+    we capture the ToC at the front, chapter intros in the middle and the
+    glossary/summary at the end — critical for topic extraction.
+    """
     try:
         from pdf2image import convert_from_bytes
+        from pdf2image.exceptions import PDFPageCountError
         import pytesseract
+        import pypdf as _pypdf
+        import io as _io
     except ImportError:
         return ""
+
     try:
-        images = convert_from_bytes(
-            pdf_bytes, dpi=dpi, first_page=1, last_page=max_pages
-        )
+        total_pages = len(_pypdf.PdfReader(_io.BytesIO(pdf_bytes)).pages)
     except Exception:
-        return ""
+        total_pages = max_pages
+
+    if total_pages <= max_pages:
+        page_numbers = list(range(1, total_pages + 1))
+    else:
+        # Always OCR the first 4 pages (ToC) + the last 2 (glossary/answers)
+        # and sample the rest evenly.
+        head = list(range(1, min(5, total_pages + 1)))
+        tail = list(range(max(total_pages - 1, 1), total_pages + 1))
+        remaining = max_pages - len(head) - len(tail)
+        if remaining > 0:
+            # Pick `remaining` pages spaced evenly in [head_end+1 .. tail_start-1]
+            start = head[-1] + 1
+            end = tail[0] - 1
+            if end > start and remaining > 0:
+                step = max(1, (end - start) // remaining)
+                middle = list(range(start, end + 1, step))[:remaining]
+            else:
+                middle = []
+        else:
+            middle = []
+        page_numbers = sorted(set(head + middle + tail))
+
     pieces: list = []
-    for img in images:
+    for pn in page_numbers:
         try:
-            pieces.append(pytesseract.image_to_string(img) or "")
-        except Exception:
+            imgs = convert_from_bytes(
+                pdf_bytes, dpi=dpi, first_page=pn, last_page=pn
+            )
+        except (PDFPageCountError, Exception):
             continue
+        for img in imgs:
+            try:
+                pieces.append(pytesseract.image_to_string(img) or "")
+            except Exception:
+                continue
     return "\n\n".join(p for p in pieces if p.strip())
 
 
