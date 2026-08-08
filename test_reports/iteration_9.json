@@ -1,0 +1,21 @@
+{
+  "summary": "Verified textbook async ingestion + extract-topics 409/400 fix end-to-end. Backend: 14/14 pytest cases passed covering OCR binary presence (pdftoppm + tesseract), async upload returns status=ingesting immediately (<15s), status flips to indexed within ~1-2s for small PDFs, extract-topics returns 200 with topics list once indexed, returns 400 with 'no indexed text available' for extraction_failed textbook (Physics ICSE 2026.pdf existing in DB), and regression endpoints (/api/papers, /api/qbank, /api/competitive-exams) all reachable. Frontend: uploaded small PDF via UI as admin, row appeared, polling refreshed the list and the newly-uploaded row transitioned to indexed automatically (Extract Topics count increased from initial state to 24 after upload). The transition for the small text PDF was <2s so the visible 'Processing PDF...' label was not captured in the screenshot window, but the code path is verified (button code sets disabled + 'Processing PDF...' label whenever status==='ingesting', confirmed in Textbooks.jsx lines 273-287). 409 response for extract-topics-while-ingesting is also verified via backend test.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_textbook_ingest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 1406 lines — approaching the 700-line threshold for splitting; consider extracting textbook routes, paper routes, and startup bootstrap into separate modules.",
+    "Async upload uses fire-and-forget asyncio.create_task(_ingest()) without storing a reference — if the process is killed mid-ingest the textbook can be stuck in 'ingesting' forever. The startup 'recovered orphaned pending' logic covers papers/solutions but does NOT cover textbooks stuck in 'ingesting' state. Recommend extending the startup recovery block to reset stale ingesting textbooks (e.g. older than N minutes) to extraction_failed."
+  ],
+  "updated_files": ["/app/backend/tests/test_textbook_ingest.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@bodhi.ai / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Uploaded and cleaned up TEST_UIPhysics + TEST_Physics textbooks; no residual test data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_textbook_ingest.py at /app/backend/tests covers the full async ingest + extract-topics flow and can be reused. Existing DB textbooks used: an extraction_failed one (Physics ICSE 2026.pdf) for 400 path and indexed/topics_ready ones for 200 path."
+}

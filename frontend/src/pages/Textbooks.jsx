@@ -32,6 +32,17 @@ export default function Textbooks() {
     load();
   }, []);
 
+  // Poll every 5s while any textbook is still ingesting so users see the
+  // status flip from "ingesting" → "indexed"/"topics_ready" without needing
+  // to reload the page. Background OCR of a large scanned PDF can take
+  // 30-120s and users otherwise have no signal of progress.
+  useEffect(() => {
+    const hasIngesting = textbooks.some((tb) => tb.status === "ingesting");
+    if (!hasIngesting) return;
+    const iv = setInterval(load, 5000);
+    return () => clearInterval(iv);
+  }, [textbooks]);
+
   const onFile = (f) => {
     if (!f) return;
     if (!f.name.toLowerCase().endsWith(".pdf")) {
@@ -62,7 +73,7 @@ export default function Textbooks() {
         fd,
         { headers: { "Content-Type": "multipart/form-data" } }
       );
-      toast.success("Textbook uploaded & indexed");
+      toast.success("Uploaded — indexing in the background");
       setFile(null);
       setSubject("");
       setClassName("");
@@ -256,13 +267,25 @@ export default function Textbooks() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => extractTopics(tb.id)}
-                          disabled={extractingId === tb.id || tb.is_owned === false}
+                          disabled={
+                            extractingId === tb.id ||
+                            tb.is_owned === false ||
+                            tb.status === "ingesting"
+                          }
                           className="qp-btn qp-btn-secondary text-xs"
-                          title={tb.is_owned === false ? "Shared library — read-only" : undefined}
+                          title={
+                            tb.status === "ingesting"
+                              ? "Still OCR'ing the PDF — please wait a moment"
+                              : tb.is_owned === false
+                              ? "Shared library — read-only"
+                              : undefined
+                          }
                           data-testid={`extract-topics-${tb.id}`}
                         >
                           <Sparkle size={14} weight="bold" />
-                          {extractingId === tb.id
+                          {tb.status === "ingesting"
+                            ? "Processing PDF..."
+                            : extractingId === tb.id
                             ? "Analyzing..."
                             : tb.topic_count > 0
                             ? "Re-extract"

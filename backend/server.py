@@ -177,6 +177,28 @@ def serialize_user(doc: dict) -> dict:
 # =========================================================
 @app.on_event("startup")
 async def startup():
+    # OCR bootstrap — poppler-utils + tesseract-ocr get evicted from the
+    # container filesystem on pod re-provisioning. Install them if missing
+    # so textbook OCR works on fresh boots without manual intervention.
+    try:
+        import shutil
+        import subprocess
+        if not (shutil.which("pdftoppm") and shutil.which("tesseract")):
+            logger.warning("OCR binaries missing — installing poppler-utils + tesseract-ocr")
+            subprocess.run(
+                ["apt-get", "update", "-qq"], check=False, timeout=60
+            )
+            subprocess.run(
+                ["apt-get", "install", "-y", "-qq", "poppler-utils", "tesseract-ocr"],
+                check=False, timeout=180,
+            )
+            if shutil.which("pdftoppm") and shutil.which("tesseract"):
+                logger.info("OCR binaries installed successfully")
+            else:
+                logger.error("OCR binaries still missing after install attempt")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"OCR bootstrap failed (scanned PDFs won't OCR): {e}")
+
     try:
         init_storage()
     except Exception as e:  # noqa: BLE001
@@ -453,8 +475,25 @@ async def extract_topics(textbook_id: str, user: dict = Depends(get_current_user
     if tb["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
     chunks = tb.get("chunks") or []
-    if not chunks:
-        raise HTTPException(status_code=400, detail="No indexed text available")
+    status = tb.get("status", "")
+    if status == "ingesting":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Textbook is still being processed (OCR + chunking). "
+                "This usually takes 30-120 seconds for large scanned PDFs. "
+                "Please wait a moment and try again."
+            ),
+        )
+    if status == "extraction_failed" or not chunks:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No indexed text available for this textbook. The PDF may be "
+                "scanned images that couldn't be OCR'd, or ingestion failed. "
+                "Try uploading a text-searchable PDF, or re-upload."
+            ),
+        )
 
     # Sample chunks EVENLY across the textbook so the LLM sees content from
     # every chapter rather than only the front matter. For an ICSE Class-10
