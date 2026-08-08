@@ -241,6 +241,24 @@ async def startup():
             logger.warning(
                 f"Recovered {sol_res.modified_count} orphaned 'pending' solution(s) at startup"
             )
+        # Textbook async ingest is fire-and-forget asyncio.create_task; on a
+        # process kill the row is stuck in `ingesting` forever. Reset to
+        # extraction_failed with a friendly message so the UI shows a retry
+        # (via re-upload) rather than a spinner that never resolves.
+        tb_res = await db.textbooks.update_many(
+            {"status": "ingesting"},
+            {"$set": {
+                "status": "extraction_failed",
+                "extraction_error": (
+                    "Text extraction was interrupted by a server restart. "
+                    "Please re-upload the textbook."
+                ),
+            }},
+        )
+        if tb_res.modified_count:
+            logger.warning(
+                f"Recovered {tb_res.modified_count} orphaned 'ingesting' textbook(s) at startup"
+            )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Orphan recovery failed: {e}")
 
