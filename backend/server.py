@@ -462,27 +462,37 @@ async def reindex_textbook(textbook_id: str, user: dict = Depends(get_current_us
         data, _ct = get_object(tb["storage_path"])
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Could not fetch PDF: {e}")
-    try:
-        text = extract_text(data)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"Re-extraction failed: {e}")
-    chunks = chunk_text(text)
+
+    # Flip status to `ingesting` immediately, then run OCR + chunking in a
+    # background task. Same pattern as fresh upload so the proxy doesn't 502
+    # on the 60-120s OCR of large scanned PDFs.
     await db.textbooks.update_one(
         {"id": textbook_id},
-        {
-            "$set": {
-                "chunks": chunks[:50],
+        {"$set": {"status": "ingesting", "topics": [], "extraction_error": None}},
+    )
+
+    async def _reindex():
+        try:
+            text = await asyncio.to_thread(extract_text, data)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Reindex extract failed for {textbook_id}: {e}")
+            await db.textbooks.update_one(
+                {"id": textbook_id},
+                {"$set": {"status": "extraction_failed"}},
+            )
+            return
+        chunks = chunk_text(text)
+        await db.textbooks.update_one(
+            {"id": textbook_id},
+            {"$set": {
+                "chunks": chunks[:120],
                 "chunk_count": len(chunks),
                 "status": "indexed" if chunks else "extraction_failed",
-                "topics": [],  # force re-extraction
-            }
-        },
-    )
-    return {
-        "id": textbook_id,
-        "chunk_count": len(chunks),
-        "status": "indexed" if chunks else "extraction_failed",
-    }
+            }},
+        )
+
+    asyncio.create_task(_reindex())
+    return {"id": textbook_id, "status": "ingesting"}
 
 
 @api_router.post("/textbooks/{textbook_id}/extract-topics")
@@ -547,10 +557,28 @@ async def extract_topics(textbook_id: str, user: dict = Depends(get_current_user
         # Increased cap from 12 to 20 — many ICSE/CBSE books have 12-18 main
         # chapters and we were truncating real topics off the list.
         clean = clean[:20]
+        if not clean:
+            # LLM found nothing usable — either the OCR'd text is garbage
+            # (heavily scanned PDF with poor OCR) or the excerpt is empty.
+            # Keep status as `indexed` so the user can retry, and surface
+            # the failure through the HTTP error instead of masking it
+            # behind a misleading `topics_ready`.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The AI couldn't identify any topics from the extracted "
+                    "text. The PDF may be a scanned image with unreadable OCR, "
+                    "or the visible text may be too fragmented. Try uploading a "
+                    "text-searchable PDF, or a clearer scan."
+                ),
+            )
         await db.textbooks.update_one(
             {"id": textbook_id}, {"$set": {"topics": clean, "status": "topics_ready"}}
         )
         return {"topics": clean}
+    except HTTPException:
+        # Preserve intentional 4xx (e.g. 422 zero-topics) — don't mask as 502
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("Topic extraction failed")
         raise HTTPException(status_code=502, detail=f"Topic extraction failed: {e}")

@@ -380,8 +380,16 @@ def _strip_boilerplate(text: str) -> str:
             cleaned.append("")
             continue
         low = s.lower()
-        # Watermark patterns
+        # Watermark patterns — expanded to catch common scanner-app stamps
+        # that would otherwise inflate the char count and mask an empty
+        # text layer (i.e. a scanned PDF that needs OCR).
         if "downloaded from" in low:
+            continue
+        if "scanned by camscanner" in low or low == "camscanner":
+            continue
+        if "scanned with camscanner" in low:
+            continue
+        if "tap here to remove ads" in low or "cam scanner" in low:
             continue
         if url_re.match(s):
             continue

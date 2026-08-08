@@ -1,0 +1,29 @@
+{
+  "summary": "Verified the review-request fixes end-to-end for scanned/watermarked PDFs. (1) _strip_boilerplate now filters CamScanner watermarks — input of 1154 chars of 'Scanned by CamScanner' collapses to 0 chars, confirming OCR trigger will fire. (2) extract-topics happy path on the seeded sl-arora-class-11-complete.pdf (id b7b444fc-…) returned 200 with 8 real physics topics: Mathematical Tools, Fundamental Forces And Laws, Units And Measurements, Errors And Significant Figures, Kinematic Equations, Graphs In Motion, Vectors, Motion In A Plane — exactly the physics-of-Class-11 content promised. (3) Reindex endpoint returns 200 {status:'ingesting'} in <2s, DB status flips to ingesting immediately, and background task completes to status=indexed with 48 chunks (well under the new 120 cap). (4) Regression suite (/api/papers, /api/qbank, /api/competitive-exams, /api/textbooks) all reachable. (5) Frontend loads textbook list, sl-arora row shows INDEXED badge and EXTRACT TOPICS button (post-reindex which cleared topics). Fixed one bug found during review (see below).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_reindex_and_topics.py",
+    "/app/test_reports/pytest/reindex_topics.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "FIXED during this iteration: In server.py extract_topics(), the intentional HTTPException(422) raised at line ~566 for the 'zero topics returned' case was being caught by the bare `except Exception as e` handler ~line 579 and re-raised as HTTPException(status_code=502, detail='Topic extraction failed: 422: ...'). This defeated the purpose of the review-request fix (users would see 502 instead of the friendly 422 'couldn\\'t identify any topics' message). Added `except HTTPException: raise` before the generic handler.",
+    "Reindex fire-and-forget asyncio.create_task(_reindex()) has the same orphan-risk as upload flow — if the process is killed mid-reindex the book gets stuck in 'ingesting'. Startup recovery already exists for papers/solutions; consider extending it to stale ingesting textbooks (flagged in iter 9 already, still applies).",
+    "server.py is now 1449 lines — split into route modules recommended."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (added except HTTPException: raise in extract_topics to preserve 422)",
+    "/app/backend/tests/test_reindex_and_topics.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@bodhi.ai / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Used pre-seeded sl-arora textbook (id b7b444fc-e70c-4d4c-8f05-633c0889a8c5). No new data created.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_reindex_and_topics.py covers strip_boilerplate CamScanner filter, reindex async ingestion (poll up to 6min), extract-topics happy path against seeded sl-arora book, and regression endpoints. Auto-detects REACT_APP_BACKEND_URL from env or frontend/.env. The 422 zero-topics negative path is not directly reachable via any existing DB textbook (Physics ICSE 2026.pdf hits the 400/no-chunks branch, not 422). To exercise 422 you'd need a textbook with valid chunks but where the LLM returns []; consider mocking chat_complete in a unit test if strict coverage is needed.",
+  "rca of the issue": "Original scanned PDF (SL Arora Class 11) had 'Scanned by CamScanner' watermarks in every page's text layer inflating extracted chars to ~22KB, so the >500-char OCR-skip threshold never tripped. LLM saw only watermarks → 0 topics → endpoint silently flipped status=topics_ready with empty topics. Main agent fixed strip_boilerplate + reindex-async + 422-on-zero-topics; testing agent additionally caught that the bare `except Exception` handler was swallowing the 422 → 502, and fixed it."
+}
