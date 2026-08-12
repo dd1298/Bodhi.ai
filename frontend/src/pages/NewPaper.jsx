@@ -41,6 +41,28 @@ Section E (12 marks) — 3 Case-Study/Source-Based questions of 4 marks each, ea
 
 Total: 80 marks, 3 hours.`;
 
+const ISC_CLASS_12_BLUEPRINT = `Section A (14 marks, compulsory — answer ALL)
+- Q1: 14 objective/MCQ questions, 1 mark each. Each MCQ has 4 options labelled (a)-(d). Include assertion-reason and one-word/fill-in items. Cover the full topic list.
+
+Section B (20 marks) — Answer ALL. Internal choice in ONE question.
+- 10 Short-Answer questions, 2 marks each. Mix definitions, reasoning, short derivations, and 1-step numericals.
+
+Section C (21 marks) — Answer ALL. Internal choice in ONE question.
+- 7 Short-Answer questions, 3 marks each. Include multi-step numericals, mechanism/derivation steps, and diagram-based reasoning.
+
+Section D (15 marks) — Answer ALL. Internal choice in ONE question.
+- 3 Long-Answer questions, 5 marks each. Each question subdivided into (a) + (b) + (c) parts totalling 5 marks. Cover the toughest concepts in depth (derivations, structured numericals, case-based long answers).
+
+Total: 70 marks theory, 3 hours (+ 15 minutes reading time). Print "[15 minutes reading time, no writing allowed]" in the instructions line. Practical/Project component of 30 marks is assessed separately and is NOT part of this paper.`;
+
+const CBSE_CLASS_12_BLUEPRINT = `Section A (20 marks) — 20 questions of 1 mark each. Includes 18 MCQs (4 options) + 2 Assertion-Reason items with standard options (a) both true & R explains A / (b) both true & R does not explain A / (c) A true R false / (d) A false R true.
+Section B (10 marks) — 5 Very Short Answer questions of 2 marks each. Internal choice in 2 questions.
+Section C (18 marks) — 6 Short Answer questions of 3 marks each. Internal choice in 2 questions.
+Section D (20 marks) — 4 Long Answer questions of 5 marks each. Internal choice in 2 questions.
+Section E (12 marks) — 3 Case-Study/Source-Based questions of 4 marks each. Each with sub-parts (a) 1m + (b) 1m + (c) 2m (with an internal choice in the 2-mark sub-part).
+
+Total: 80 marks, 3 hours. Competency-based questions (MCQ + case-study + assertion-reason) should make up roughly 50% of the paper.`;
+
 export default function NewPaper() {
   const navigate = useNavigate();
   const [textbooks, setTextbooks] = useState([]);
@@ -558,6 +580,22 @@ export default function NewPaper() {
                   data-testid="blueprint-preset-cbse"
                 >
                   Use CBSE Class 10 (80m / 3h)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSectionBlueprint(ISC_CLASS_12_BLUEPRINT)}
+                  className="qp-btn qp-btn-secondary text-xs"
+                  data-testid="blueprint-preset-isc-12"
+                >
+                  Use ISC Class 12 (70m / 3h)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSectionBlueprint(CBSE_CLASS_12_BLUEPRINT)}
+                  className="qp-btn qp-btn-secondary text-xs"
+                  data-testid="blueprint-preset-cbse-12"
+                >
+                  Use CBSE Class 12 (80m / 3h)
                 </button>
                 {sectionBlueprint && (
                   <button

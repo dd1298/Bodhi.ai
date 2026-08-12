@@ -228,3 +228,16 @@ Build an AI-Powered Question Paper Generator for schools and colleges. Teachers 
 ## Next Action Items
 - End-to-end testing
 - Optional: seed admin account, add "regenerate question" endpoint, answer-key generation
+
+
+---
+
+## 2026-02 — Class 12 Board Blueprints
+Added two new one-click paper blueprints to `NewPaper.jsx` alongside the existing Class 10 presets:
+- **ISC Class 12** (70-mark theory, 3h + 15 min reading) — 4 sections: A (14 MCQ × 1m), B (10 SA × 2m, internal choice ×1), C (7 SA × 3m, internal choice ×1), D (3 LA × 5m, internal choice ×1). Modelled on the CISCE Chemistry/Physics theory pattern; practical/project 30m excluded.
+- **CBSE Class 12** (80-mark, 3h) — 5 sections A–E: 20×1 (MCQ + assertion-reason), 5×2 VSA, 6×3 SA, 4×5 LA, 3×4 case-study. Internal choices in 2 questions each of Sections B/C/D. Competency-based content ~50% of paper.
+
+Test IDs: `blueprint-preset-isc-12`, `blueprint-preset-cbse-12`. Class 10 presets untouched.
+
+## Still Open (P0)
+- Chunked upload for >25 MB textbook PDFs — backend endpoints exist in `chunked_upload.py` but router is not registered in `server.py` and frontend still uses single-shot `POST /textbooks/upload`. Blocks large NCERT/SL-Arora uploads.
