@@ -49,6 +49,35 @@ def test_math_to_paragraph_html_uses_new_tag():
     print("OK  math HTML uses proportional <img> tags")
 
 
+def test_trivial_latex_numbers_render_as_plain_text():
+    """Regression: LLM often emits `$4$`, `$1.0$ M`, `$300K$` in ISC/CBSE chem
+    papers. These must NOT leak literal `$` symbols to the PDF (bug reported
+    by user 2026-02). Trivial numeric content should short-circuit past the
+    matplotlib PNG path and emit clean text."""
+    cases = {
+        "Cell has $4$ atoms.": "Cell has 4 atoms.",
+        "Concentration $1.0$ M solution.": "Concentration 1.0 M solution.",
+        "At $300K$ the rate doubles.": "At 300K the rate doubles.",
+        "Volume $25$ ml added.": "Volume 25 ml added.",
+    }
+    for inp, expected in cases.items():
+        out = _math_to_paragraph_html(inp)
+        assert "$" not in out, f"literal $ leaked for input {inp!r}: {out!r}"
+        assert expected in out, f"expected {expected!r} in {out!r}"
+    print("OK  trivial LaTeX numbers render as clean text")
+
+
+def test_real_latex_still_renders_as_image():
+    """Regression companion: proper LaTeX math (backslash commands, subscripts,
+    fractions) must still hit the matplotlib PNG path — we don't want to over-
+    correct and lose real math rendering."""
+    out = _math_to_paragraph_html("React $H_2SO_4$ with $\\frac{n}{V}$ molarity.")
+    imgs = re.findall(r"<img[^>]+>", out)
+    assert len(imgs) == 2, f"expected 2 math images, got {len(imgs)}: {out!r}"
+    print("OK  real LaTeX still renders as PNG images")
+
+
+
 def test_render_full_paper_pdf():
     """End-to-end: render a paper with inline + block math, ensure non-empty PDF."""
     paper = {

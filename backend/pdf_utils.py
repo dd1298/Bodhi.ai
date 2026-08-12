@@ -312,10 +312,16 @@ def _math_to_paragraph_html(text: str) -> str:
                 segments.append(("text", text[i:]))
                 break
             inner = text[i + 1 : end]
-            # Heuristic: skip bare currency like "$10" where the content is
-            # purely digits/space/commas/dot with no LaTeX markers. Treat as text.
-            if inner and re.fullmatch(r"[\d,\. ]+", inner):
-                segments.append(("text", text[i : end + 1]))
+            # If content is trivially plain (numbers, units, ASCII words), skip
+            # the matplotlib PNG round-trip and just emit the inner text — this
+            # keeps `$4$` from rendering as literal `$4$` when mathtext bounces,
+            # and speeds up rendering for the very common "number in a sentence"
+            # case (e.g. `$1.0$ M`, `$300$ K`, `$25$ ml`). Anything with LaTeX
+            # markers (\, ^, _, {, }, /) still goes down the math path.
+            if inner and not re.search(r"[\\\^_{}/]", inner) and re.fullmatch(
+                r"[A-Za-z0-9,\.\-+×·%°'\" ]+", inner
+            ):
+                segments.append(("text", inner))
                 i = end + 1
                 continue
             segments.append(("math", inner))
